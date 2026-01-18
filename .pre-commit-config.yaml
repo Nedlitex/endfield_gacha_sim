@@ -1,0 +1,38 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+fail_fast: false
+repos:
+  -   repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v6.0.0
+      hooks:
+        -   id: trailing-whitespace
+        -   id: end-of-file-fixer
+        -   id: check-yaml
+  -   repo: https://github.com/asottile/pyupgrade
+      rev: v3.19.1
+      hooks:
+        -   id: pyupgrade
+            args:
+              - --py39-plus
+              - --keep-runtime-typing
+  -   repo: https://github.com/myint/autoflake
+      rev: v2.3.1
+      hooks:
+        -   id: autoflake
+            args:
+              - --recursive
+              - --in-place
+              - --remove-all-unused-imports
+              - --remove-unused-variables
+              - --expand-star-imports
+              - --remove-duplicate-keys
+  -   repo: https://github.com/pycqa/isort
+      rev: 5.13.2
+      hooks:
+        -   id: isort
+            name: isort (python)
+            args: ["--profile", "black"]
+  -   repo: https://github.com/psf/black
+      rev: 24.10.0
+      hooks:
+        -   id: black

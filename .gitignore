@@ -224,3 +224,5 @@ integration_tests/data/
 # Ignore everything in .elasticbeanstalk directories except config.yml
 **/.elasticbeanstalk/*
 !**/.elasticbeanstalk/config.yml
+
+.claude
