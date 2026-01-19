@@ -5,6 +5,7 @@ import streamlit as st
 from strategy import (
     BannerIndexCondition,
     ContinueAction,
+    DefinitiveDrawCounterCondition,
     DelegateAction,
     DrawBehavior,
     DrawCountCondition,
@@ -209,17 +210,27 @@ def _condition_to_text(cond: StrategyCondition) -> str:
     elif isinstance(cond, PityCounterCondition):
         parts = []
         if cond.min_pity is not None:
-            parts.append(f"保底计数>={cond.min_pity}")
+            parts.append(f"小保底计数>={cond.min_pity}")
         if cond.max_pity is not None:
-            parts.append(f"保底计数<={cond.max_pity}")
-        return " 且 ".join(parts) if parts else "任意保底计数"
+            parts.append(f"小保底计数<={cond.max_pity}")
+        return " 且 ".join(parts) if parts else "任意小保底计数"
+    elif isinstance(cond, DefinitiveDrawCounterCondition):
+        parts = []
+        if cond.min_definitive is not None:
+            parts.append(f"大保底计数>={cond.min_definitive}")
+        if cond.max_definitive is not None:
+            parts.append(f"大保底计数<={cond.max_definitive}")
+        return " 且 ".join(parts) if parts else "任意大保底计数"
     return str(cond)
 
 
 def _action_to_text(action) -> str:
     """Convert an action to human-readable text."""
     if isinstance(action, StopAction):
-        return "停止抽卡"
+        base = "停止抽卡"
+        if action.pay_override is not None:
+            base += f" (氪金: {'是' if action.pay_override else '否'})"
+        return base
     elif isinstance(action, ContinueAction):
         parts = []
         if action.min_draws_per_banner > 0:
@@ -234,6 +245,10 @@ def _action_to_text(action) -> str:
             parts.append(f"目标{action.target_potential}潜能")
         if action.target_pity:
             parts.append(f"抽到{action.target_pity}保底计数")
+        if action.target_definitive_draw:
+            parts.append(f"抽到{action.target_definitive_draw}大保底计数")
+        if action.pay_override is not None:
+            parts.append(f"氪金: {'是' if action.pay_override else '否'}")
         return "继续抽卡" + (f" ({', '.join(parts)})" if parts else "")
     elif isinstance(action, DelegateAction):
         return f"执行策略「{action.strategy_name}」"
@@ -443,6 +458,38 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
             if pity_counter_max == 0:
                 pity_counter_max = None
 
+    # Definitive draw counter condition
+    use_definitive_counter = st.checkbox(
+        "大保底计数条件",
+        key=f"{prefix}new_rule_use_definitive_counter",
+        help="距离大保底(必得UP)的抽数",
+    )
+    definitive_counter_min = None
+    definitive_counter_max = None
+    if use_definitive_counter:
+        col1, col2 = st.columns(2)
+        with col1:
+            definitive_counter_min = st.number_input(
+                "最小大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_definitive_counter_min",
+            )
+            if definitive_counter_min == 0:
+                definitive_counter_min = None
+        with col2:
+            definitive_counter_max = st.number_input(
+                "最大大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_definitive_counter_max",
+                help="0表示不限制",
+            )
+            if definitive_counter_max == 0:
+                definitive_counter_max = None
+
     # Action
     st.markdown("**动作**")
     action_type = st.selectbox(
@@ -458,7 +505,18 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
 
     action = None
     if action_type == "stop":
-        action = StopAction()
+        stop_pay_override = st.selectbox(
+            "氪金覆盖",
+            [None, True, False],
+            format_func=lambda x: {
+                None: "使用策略默认",
+                True: "强制氪金",
+                False: "强制不氪金",
+            }[x],
+            key=f"{prefix}new_rule_stop_pay_override",
+            help="覆盖策略的默认氪金设置",
+        )
+        action = StopAction(pay_override=stop_pay_override)
     elif action_type == "continue":
         col1, col2 = st.columns(2)
         with col1:
@@ -513,6 +571,29 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 help="抽到此保底计数后停止(0=不限制)",
             )
 
+        col7, col8 = st.columns(2)
+        with col7:
+            target_definitive = st.number_input(
+                "目标大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_action_target_definitive",
+                help="抽到此大保底计数后停止(0=不限制)",
+            )
+        with col8:
+            continue_pay_override = st.selectbox(
+                "氪金覆盖",
+                [None, True, False],
+                format_func=lambda x: {
+                    None: "使用策略默认",
+                    True: "强制氪金",
+                    False: "强制不氪金",
+                }[x],
+                key=f"{prefix}new_rule_continue_pay_override",
+                help="覆盖策略的默认氪金设置",
+            )
+
         action = ContinueAction(
             min_draws_per_banner=min_draws,
             max_draws_per_banner=max_draws if max_draws > 0 else None,
@@ -520,6 +601,8 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
             stop_on_highest_rarity=stop_on_highest_rarity,
             target_potential=target_potential if target_potential > 0 else None,
             target_pity=target_pity if target_pity > 0 else None,
+            target_definitive_draw=target_definitive if target_definitive > 0 else None,
+            pay_override=continue_pay_override,
         )
     elif action_type == "delegate":
         other_strategies = _get_other_strategy_names()
@@ -587,6 +670,16 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                             max_pity=pity_counter_max,
                         )
                     )
+                if use_definitive_counter and (
+                    definitive_counter_min is not None
+                    or definitive_counter_max is not None
+                ):
+                    conditions.append(
+                        DefinitiveDrawCounterCondition(
+                            min_definitive=definitive_counter_min,
+                            max_definitive=definitive_counter_max,
+                        )
+                    )
 
                 # Create rule
                 new_rule = StrategyRule(
@@ -629,7 +722,23 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
 
     new_action = None
     if action_type == "stop":
-        new_action = StopAction()
+        current_pay_override = (
+            action.pay_override if isinstance(action, StopAction) else None
+        )
+        pay_override_options = [None, True, False]
+        stop_pay_override = st.selectbox(
+            "氪金覆盖",
+            pay_override_options,
+            index=pay_override_options.index(current_pay_override),
+            format_func=lambda x: {
+                None: "使用策略默认",
+                True: "强制氪金",
+                False: "强制不氪金",
+            }[x],
+            key=f"{prefix}default_stop_pay_override",
+            help="覆盖策略的默认氪金设置",
+        )
+        new_action = StopAction(pay_override=stop_pay_override)
     elif action_type == "continue":
         # Get current values if action is ContinueAction
         current_min = (
@@ -651,6 +760,14 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
         )
         current_target_pity = (
             action.target_pity if isinstance(action, ContinueAction) else None
+        )
+        current_target_definitive = (
+            action.target_definitive_draw
+            if isinstance(action, ContinueAction)
+            else None
+        )
+        current_pay_override = (
+            action.pay_override if isinstance(action, ContinueAction) else None
         )
 
         col1, col2 = st.columns(2)
@@ -708,6 +825,31 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
                 help="抽到此保底计数后停止(0=不限制)",
             )
 
+        col7, col8 = st.columns(2)
+        with col7:
+            target_definitive = st.number_input(
+                "目标大保底计数",
+                min_value=0,
+                value=current_target_definitive if current_target_definitive else 0,
+                step=1,
+                key=f"{prefix}default_action_target_definitive",
+                help="抽到此大保底计数后停止(0=不限制)",
+            )
+        with col8:
+            pay_override_options = [None, True, False]
+            continue_pay_override = st.selectbox(
+                "氪金覆盖",
+                pay_override_options,
+                index=pay_override_options.index(current_pay_override),
+                format_func=lambda x: {
+                    None: "使用策略默认",
+                    True: "强制氪金",
+                    False: "强制不氪金",
+                }[x],
+                key=f"{prefix}default_continue_pay_override",
+                help="覆盖策略的默认氪金设置",
+            )
+
         new_action = ContinueAction(
             min_draws_per_banner=min_draws,
             max_draws_per_banner=max_draws if max_draws > 0 else None,
@@ -715,6 +857,8 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
             stop_on_highest_rarity=stop_on_highest_rarity,
             target_potential=target_potential if target_potential > 0 else None,
             target_pity=target_pity if target_pity > 0 else None,
+            target_definitive_draw=target_definitive if target_definitive > 0 else None,
+            pay_override=continue_pay_override,
         )
     elif action_type == "delegate":
         other_strategies = _get_other_strategy_names()
@@ -856,7 +1000,18 @@ def _render_strategy_creation_dialog():
 
     new_default_action = None
     if default_action_type == "stop":
-        new_default_action = StopAction()
+        stop_pay_override = st.selectbox(
+            "氪金覆盖",
+            [None, True, False],
+            format_func=lambda x: {
+                None: "使用策略默认",
+                True: "强制氪金",
+                False: "强制不氪金",
+            }[x],
+            key=f"{prefix}stop_pay_override",
+            help="覆盖策略的默认氪金设置",
+        )
+        new_default_action = StopAction(pay_override=stop_pay_override)
     else:
         col4, col5 = st.columns(2)
         with col4:
@@ -913,6 +1068,29 @@ def _render_strategy_creation_dialog():
                 help="抽到此保底计数后停止(0=不限制)",
             )
 
+        col10, col11 = st.columns(2)
+        with col10:
+            new_target_definitive = st.number_input(
+                "目标大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}target_definitive",
+                help="抽到此大保底计数后停止(0=不限制)",
+            )
+        with col11:
+            continue_pay_override = st.selectbox(
+                "氪金覆盖",
+                [None, True, False],
+                format_func=lambda x: {
+                    None: "使用策略默认",
+                    True: "强制氪金",
+                    False: "强制不氪金",
+                }[x],
+                key=f"{prefix}continue_pay_override",
+                help="覆盖策略的默认氪金设置",
+            )
+
         new_default_action = ContinueAction(
             min_draws_per_banner=new_min_draws,
             max_draws_per_banner=new_max_draws if new_max_draws > 0 else None,
@@ -920,6 +1098,10 @@ def _render_strategy_creation_dialog():
             stop_on_highest_rarity=new_stop_on_highest_rarity,
             target_potential=new_target_potential if new_target_potential > 0 else None,
             target_pity=new_target_pity if new_target_pity > 0 else None,
+            target_definitive_draw=(
+                new_target_definitive if new_target_definitive > 0 else None
+            ),
+            pay_override=continue_pay_override,
         )
 
     # Check for duplicate name
@@ -1169,6 +1351,38 @@ def _render_creation_rule_editor(prefix: str):
             if pity_counter_max == 0:
                 pity_counter_max = None
 
+    # Definitive draw counter condition
+    use_definitive_counter = st.checkbox(
+        "大保底计数条件",
+        key=f"{rule_prefix}use_definitive_counter",
+        help="距离大保底(必得UP)的抽数",
+    )
+    definitive_counter_min = None
+    definitive_counter_max = None
+    if use_definitive_counter:
+        col1, col2 = st.columns(2)
+        with col1:
+            definitive_counter_min = st.number_input(
+                "最小大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}definitive_counter_min",
+            )
+            if definitive_counter_min == 0:
+                definitive_counter_min = None
+        with col2:
+            definitive_counter_max = st.number_input(
+                "最大大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}definitive_counter_max",
+                help="0表示不限制",
+            )
+            if definitive_counter_max == 0:
+                definitive_counter_max = None
+
     # === Action ===
     st.markdown("**动作**")
     action_type = st.selectbox(
@@ -1184,7 +1398,18 @@ def _render_creation_rule_editor(prefix: str):
 
     action = None
     if action_type == "stop":
-        action = StopAction()
+        stop_pay_override = st.selectbox(
+            "氪金覆盖",
+            [None, True, False],
+            format_func=lambda x: {
+                None: "使用策略默认",
+                True: "强制氪金",
+                False: "强制不氪金",
+            }[x],
+            key=f"{rule_prefix}stop_pay_override",
+            help="覆盖策略的默认氪金设置",
+        )
+        action = StopAction(pay_override=stop_pay_override)
     elif action_type == "continue":
         col1, col2 = st.columns(2)
         with col1:
@@ -1239,6 +1464,29 @@ def _render_creation_rule_editor(prefix: str):
                 help="抽到此保底计数后停止(0=不限制)",
             )
 
+        col7, col8 = st.columns(2)
+        with col7:
+            target_definitive = st.number_input(
+                "目标大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}action_target_definitive",
+                help="抽到此大保底计数后停止(0=不限制)",
+            )
+        with col8:
+            continue_pay_override = st.selectbox(
+                "氪金覆盖",
+                [None, True, False],
+                format_func=lambda x: {
+                    None: "使用策略默认",
+                    True: "强制氪金",
+                    False: "强制不氪金",
+                }[x],
+                key=f"{rule_prefix}continue_pay_override",
+                help="覆盖策略的默认氪金设置",
+            )
+
         action = ContinueAction(
             min_draws_per_banner=min_draws,
             max_draws_per_banner=max_draws if max_draws > 0 else None,
@@ -1246,6 +1494,8 @@ def _render_creation_rule_editor(prefix: str):
             stop_on_highest_rarity=stop_on_hr,
             target_potential=target_pot if target_pot > 0 else None,
             target_pity=target_pity if target_pity > 0 else None,
+            target_definitive_draw=target_definitive if target_definitive > 0 else None,
+            pay_override=continue_pay_override,
         )
     elif action_type == "delegate":
         # Get all strategy names except the one being created
@@ -1256,7 +1506,7 @@ def _render_creation_rule_editor(prefix: str):
                 other_strategies,
                 key=f"{rule_prefix}action_delegate_to",
             )
-            action = DelegateAction(strategy_name=delegate_to)
+            action = DelegateAction(strategy_name=delegate_to)  # type:ignore
         else:
             st.warning("没有其他可用策略")
             action = None
@@ -1304,6 +1554,15 @@ def _render_creation_rule_editor(prefix: str):
                     PityCounterCondition(
                         min_pity=pity_counter_min,
                         max_pity=pity_counter_max,
+                    )
+                )
+            if use_definitive_counter and (
+                definitive_counter_min is not None or definitive_counter_max is not None
+            ):
+                conditions.append(
+                    DefinitiveDrawCounterCondition(
+                        min_definitive=definitive_counter_min,
+                        max_definitive=definitive_counter_max,
                     )
                 )
 

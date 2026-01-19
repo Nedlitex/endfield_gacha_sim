@@ -198,118 +198,215 @@ def _render_auto_banner_config() -> dict:
 
 def _render_run_button(num_experiments: int, auto_config: dict):
     """Render the run simulation button and execute simulation."""
+    # Initialize confirmation state
+    if "show_run_confirmation" not in st.session_state:
+        st.session_state.show_run_confirmation = False
+    if "run_simulation_confirmed" not in st.session_state:
+        st.session_state.run_simulation_confirmed = False
+
+    # Check if simulation was confirmed and should run
+    if st.session_state.run_simulation_confirmed:
+        st.session_state.run_simulation_confirmed = False
+        _execute_simulation(num_experiments, auto_config)
+        return
+
     if st.button("运行模拟", type="primary"):
-        # Build list of enabled banners
+        # Show confirmation dialog instead of running immediately
+        st.session_state.show_run_confirmation = True
+        st.rerun()
+
+    # Render confirmation dialog if active
+    if st.session_state.show_run_confirmation:
+        _render_run_confirmation_dialog(num_experiments, auto_config)
+
+
+def _render_run_confirmation_dialog(num_experiments: int, auto_config: dict):
+    """Render the confirmation dialog before running simulation."""
+
+    @st.dialog("确认运行模拟", width="large")
+    def confirmation_dialog():
+        st.markdown("### 模拟配置概览")
+
+        # Number of experiments
+        st.markdown(f"**模拟次数:** {num_experiments}")
+
+        # Build list of enabled banners and their strategies
         enabled_banners = []
-        banner_strategies = {}
         default_strategy = st.session_state.strategies[0]
+        strategy_registry = {s.name: s for s in st.session_state.strategies}
+
+        st.markdown("---")
+        st.markdown("### 卡池配置")
+
         for banner in st.session_state.banners:
             if st.session_state.run_banner_enabled.get(banner.name, False):
-                # Deep copy banner for simulation
-                banner_copy = banner.model_copy(deep=True)
-                enabled_banners.append(banner_copy)
-                # Get strategy for this banner
+                enabled_banners.append(banner)
                 strategy_name = st.session_state.run_banner_strategies.get(
                     banner.name, default_strategy.name
                 )
-                # Find strategy by name
-                found_strategy = None
-                for s in st.session_state.strategies:
-                    if s.name == strategy_name:
-                        found_strategy = s
-                        break
-                if found_strategy:
-                    banner_strategies[banner.name] = DrawStrategy(
-                        **found_strategy.model_dump()
-                    )
-                else:
-                    banner_strategies[banner.name] = DrawStrategy(
-                        **default_strategy.model_dump()
-                    )
+                strategy = strategy_registry.get(strategy_name, default_strategy)
 
-        if enabled_banners:
-            # Convert banners to dicts and back to ensure clean Pydantic validation
-            banners_for_run = [Banner(**b.model_dump()) for b in enabled_banners]
+                with st.expander(
+                    f"**{banner.name}** → 策略: {strategy_name}",
+                    expanded=False,
+                ):
+                    if banner.main_operator:
+                        st.caption(f"UP干员: {banner.main_operator.name}")
+                    # Show strategy description
+                    strategy_desc = strategy.get_description(strategy_registry)
+                    st.text(strategy_desc)
 
-            # Build auto banner configuration
-            auto_banner_template = None
-            auto_banner_strategy = None
-            auto_banner_count = auto_config.get("count", 0)
-            auto_banner_default_operators = []
+        if not enabled_banners:
+            st.warning("⚠️ 没有选择任何卡池参与模拟")
 
-            if auto_banner_count > 0:
-                # Get template for auto banners
-                template_idx = auto_config.get("template_idx", 0)
-                if template_idx < len(st.session_state.banner_templates):
-                    auto_banner_template = st.session_state.banner_templates[
-                        template_idx
-                    ].model_copy(deep=True)
+        # Auto banner config
+        auto_count = auto_config.get("count", 0)
+        if auto_count > 0:
+            st.markdown("---")
+            st.markdown("### 自动添加卡池")
+            st.markdown(f"**数量:** {auto_count}")
 
-                # Get strategy for auto banners
-                strategy_idx = auto_config.get("strategy_idx", 0)
-                if strategy_idx < len(st.session_state.strategies):
-                    auto_banner_strategy = DrawStrategy(
-                        **st.session_state.strategies[strategy_idx].model_dump()
-                    )
+            template_idx = auto_config.get("template_idx", 0)
+            strategy_idx = auto_config.get("strategy_idx", 0)
 
-                # Get default operators for auto banners
-                auto_banner_default_operators = create_default_operators()
+            if template_idx < len(st.session_state.banner_templates):
+                template = st.session_state.banner_templates[template_idx]
+                st.markdown(f"**模板:** {template.name}")
 
-            run = Run(
-                config=Config(**st.session_state.config.model_dump()),
-                banner_strategies=banner_strategies,
-                banners=banners_for_run,
-                repeat=num_experiments,
-                auto_banner_template=auto_banner_template,
-                auto_banner_strategy=auto_banner_strategy,
-                auto_banner_count=auto_banner_count,
-                auto_banner_default_operators=auto_banner_default_operators,
+            if strategy_idx < len(st.session_state.strategies):
+                auto_strategy = st.session_state.strategies[strategy_idx]
+                with st.expander(f"**策略:** {auto_strategy.name}", expanded=False):
+                    strategy_desc = auto_strategy.get_description(strategy_registry)
+                    st.text(strategy_desc)
+
+        st.markdown("---")
+
+        # Confirmation buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("取消", use_container_width=True):
+                st.session_state.show_run_confirmation = False
+                st.rerun()
+        with col2:
+            if st.button("确认运行", type="primary", use_container_width=True):
+                st.session_state.show_run_confirmation = False
+                st.session_state.run_simulation_confirmed = True
+                st.rerun()
+
+    confirmation_dialog()
+
+
+def _execute_simulation(num_experiments: int, auto_config: dict):
+    """Execute the simulation after confirmation."""
+    # Build list of enabled banners
+    enabled_banners = []
+    banner_strategies = {}
+    default_strategy = st.session_state.strategies[0]
+    for banner in st.session_state.banners:
+        if st.session_state.run_banner_enabled.get(banner.name, False):
+            # Deep copy banner for simulation
+            banner_copy = banner.model_copy(deep=True)
+            enabled_banners.append(banner_copy)
+            # Get strategy for this banner
+            strategy_name = st.session_state.run_banner_strategies.get(
+                banner.name, default_strategy.name
+            )
+            # Find strategy by name
+            found_strategy = None
+            for s in st.session_state.strategies:
+                if s.name == strategy_name:
+                    found_strategy = s
+                    break
+            if found_strategy:
+                banner_strategies[banner.name] = DrawStrategy(
+                    **found_strategy.model_dump()
+                )
+            else:
+                banner_strategies[banner.name] = DrawStrategy(
+                    **default_strategy.model_dump()
+                )
+
+    if enabled_banners:
+        # Convert banners to dicts and back to ensure clean Pydantic validation
+        banners_for_run = [Banner(**b.model_dump()) for b in enabled_banners]
+
+        # Build auto banner configuration
+        auto_banner_template = None
+        auto_banner_strategy = None
+        auto_banner_count = auto_config.get("count", 0)
+        auto_banner_default_operators = []
+
+        if auto_banner_count > 0:
+            # Get template for auto banners
+            template_idx = auto_config.get("template_idx", 0)
+            if template_idx < len(st.session_state.banner_templates):
+                auto_banner_template = st.session_state.banner_templates[
+                    template_idx
+                ].model_copy(deep=True)
+
+            # Get strategy for auto banners
+            strategy_idx = auto_config.get("strategy_idx", 0)
+            if strategy_idx < len(st.session_state.strategies):
+                auto_banner_strategy = DrawStrategy(
+                    **st.session_state.strategies[strategy_idx].model_dump()
+                )
+
+            # Get default operators for auto banners
+            auto_banner_default_operators = create_default_operators()
+
+        run = Run(
+            config=Config(**st.session_state.config.model_dump()),
+            banner_strategies=banner_strategies,
+            banners=banners_for_run,
+            repeat=num_experiments,
+            auto_banner_template=auto_banner_template,
+            auto_banner_strategy=auto_banner_strategy,
+            auto_banner_count=auto_banner_count,
+            auto_banner_default_operators=auto_banner_default_operators,
+        )
+
+        # Calculate total banners for progress display
+        total_banners = len(enabled_banners) + auto_banner_count
+
+        # Run async simulation with progress bar
+        progress_bar = st.progress(0, text=f"正在运行模拟... 0/{num_experiments}")
+
+        def update_progress(current: int, total: int):
+            progress = current / total if total > 0 else 0
+            progress_bar.progress(progress, text=f"正在运行模拟... {current}/{total}")
+
+        async def run_async():
+            return await run.run_simulation_async(
+                yield_every=max(1, num_experiments // 100),
+                progress_callback=update_progress,
             )
 
-            # Calculate total banners for progress display
-            total_banners = len(enabled_banners) + auto_banner_count
+        result_player = asyncio.run(run_async())
+        progress_bar.empty()
 
-            # Run async simulation with progress bar
-            progress_bar = st.progress(0, text=f"正在运行模拟... 0/{num_experiments}")
+        # Build banner names list including auto banners
+        banner_names = [b.name for b in enabled_banners]
+        if auto_banner_count > 0:
+            banner_names.append(f"自动池×{auto_banner_count}")
 
-            def update_progress(current: int, total: int):
-                progress = current / total if total > 0 else 0
-                progress_bar.progress(
-                    progress, text=f"正在运行模拟... {current}/{total}"
-                )
+        # Build main operators list (auto banners have dummy operators)
+        main_operators = [
+            b.main_operator.name for b in enabled_banners if b.main_operator
+        ]
 
-            async def run_async():
-                return await run.run_simulation_async(
-                    yield_every=max(1, num_experiments // 100),
-                    progress_callback=update_progress,
-                )
-
-            result_player = asyncio.run(run_async())
-            progress_bar.empty()
-
-            # Build banner names list including auto banners
-            banner_names = [b.name for b in enabled_banners]
-            if auto_banner_count > 0:
-                banner_names.append(f"自动池×{auto_banner_count}")
-
-            # Build main operators list (auto banners have dummy operators)
-            main_operators = [
-                b.main_operator.name for b in enabled_banners if b.main_operator
-            ]
-
-            st.session_state.run_results = {
-                "player": result_player,
-                "paid_draws": run.paid_draws,
-                "total_draws": run.total_draws,
-                "num_experiments": num_experiments,
-                "banners": banner_names,
-                "main_operators": main_operators,
-                "total_banner_count": total_banners,
-            }
-            update_url()
-            st.rerun()
-        else:
-            st.warning("请至少选择一个卡池参与模拟。")
+        st.session_state.run_results = {
+            "player": result_player,
+            "paid_draws": run.paid_draws,
+            "total_draws": run.total_draws,
+            "num_experiments": num_experiments,
+            "banners": banner_names,
+            "main_operators": main_operators,
+            "total_banner_count": total_banners,
+        }
+        update_url()
+        st.rerun()
+    else:
+        st.warning("请至少选择一个卡池参与模拟。")
 
 
 def _render_results():

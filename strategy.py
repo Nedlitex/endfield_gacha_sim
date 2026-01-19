@@ -51,6 +51,10 @@ class EvaluationContext(BaseModel):
     pity_counter: int = Field(
         default=0, description="Current pity counter (draws since last highest rarity)"
     )
+    definitive_draw_counter: int = Field(
+        default=0,
+        description="Current definitive draw counter (draws toward guaranteed main)",
+    )
 
     model_config = {"frozen": True}
 
@@ -272,6 +276,44 @@ class PityCounterCondition(BaseModel):
         return True
 
 
+class DefinitiveDrawCounterCondition(BaseModel):
+    """Condition based on current definitive draw counter (draws toward guaranteed main).
+
+    The definitive draw counter tracks progress toward the guaranteed main operator
+    (big pity/大保底). This is useful for strategies that want to check how close
+    the player is to hitting the definitive draw guarantee.
+
+    Examples:
+    - min_definitive=100: matches when definitive counter >= 100 (close to guarantee)
+    - max_definitive=60: matches when definitive counter <= 60 (early in cycle)
+    """
+
+    type: Literal["definitive_draw_counter"] = "definitive_draw_counter"
+    min_definitive: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Minimum definitive draw counter (inclusive). None means no minimum.",
+    )
+    max_definitive: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Maximum definitive draw counter (inclusive). None means no maximum.",
+    )
+
+    def evaluate(self, context: EvaluationContext) -> bool:
+        if (
+            self.min_definitive is not None
+            and context.definitive_draw_counter < self.min_definitive
+        ):
+            return False
+        if (
+            self.max_definitive is not None
+            and context.definitive_draw_counter > self.max_definitive
+        ):
+            return False
+        return True
+
+
 # Union of all condition types using discriminated union
 StrategyCondition = Annotated[
     Union[
@@ -283,6 +325,7 @@ StrategyCondition = Annotated[
         GotPityWithoutMainCondition,
         BannerIndexCondition,
         PityCounterCondition,
+        DefinitiveDrawCounterCondition,
     ],
     Field(discriminator="type"),
 ]
@@ -297,6 +340,10 @@ class StopAction(BaseModel):
     """Action to stop drawing."""
 
     type: Literal["stop"] = "stop"
+    pay_override: Optional[bool] = Field(
+        default=None,
+        description="Override pay setting. None = use strategy's behavior.pay",
+    )
 
 
 class ContinueAction(BaseModel):
@@ -328,6 +375,15 @@ class ContinueAction(BaseModel):
         default=None,
         ge=1,
         description="Target pity counter to reach before stopping. None = don't target pity.",
+    )
+    target_definitive_draw: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Target definitive draw counter to reach before stopping. None = don't target.",
+    )
+    pay_override: Optional[bool] = Field(
+        default=None,
+        description="Override pay setting. None = use strategy's behavior.pay",
     )
 
 
@@ -530,8 +586,18 @@ class DrawStrategy(BaseModel):
                 if context.pity_counter >= action.target_pity:
                     return False
 
+            # Check target_definitive_draw constraint
+            if action.target_definitive_draw is not None:
+                if context.definitive_draw_counter >= action.target_definitive_draw:
+                    return False
+
+            # Determine effective pay setting (action override takes precedence)
+            effective_pay = (
+                action.pay_override if action.pay_override is not None else behavior.pay
+            )
+
             # Check resource availability
-            if context.normal_draws <= 0 and not behavior.pay:
+            if context.normal_draws <= 0 and not effective_pay:
                 # No draws available and can't pay
                 # But still continue if we haven't met min_draws and can pay
                 return False
@@ -539,6 +605,31 @@ class DrawStrategy(BaseModel):
             return True
 
         return False
+
+    def get_effective_pay(
+        self,
+        context: EvaluationContext,
+        strategy_registry: Optional[dict[str, "DrawStrategy"]] = None,
+    ) -> bool:
+        """Get the effective pay setting considering action override.
+
+        Args:
+            context: Current evaluation context
+            strategy_registry: Dict for delegation lookup
+
+        Returns:
+            True if should pay for draws, False otherwise
+        """
+        try:
+            action, behavior = self.evaluate(context, strategy_registry)
+        except ValueError:
+            return False
+
+        # Check for pay_override in the action
+        if isinstance(action, (StopAction, ContinueAction)):
+            if action.pay_override is not None:
+                return action.pay_override
+        return behavior.pay
 
     def get_draw_amount(
         self,
@@ -557,9 +648,15 @@ class DrawStrategy(BaseModel):
             Number of draws to perform (1 or 10)
         """
         try:
-            _, behavior = self.evaluate(context, strategy_registry)
+            action, behavior = self.evaluate(context, strategy_registry)
         except ValueError:
             return 1
+
+        # Determine effective pay setting
+        effective_pay = behavior.pay
+        if isinstance(action, (StopAction, ContinueAction)):
+            if action.pay_override is not None:
+                effective_pay = action.pay_override
 
         if behavior.always_single_draw:
             return 1
@@ -568,7 +665,7 @@ class DrawStrategy(BaseModel):
             and context.draws_accumulated >= behavior.single_draw_after
         ):
             return 1
-        if total_available >= 10 or behavior.pay:
+        if total_available >= 10 or effective_pay:
             return 10
         return 1
 
@@ -668,6 +765,13 @@ class DrawStrategy(BaseModel):
             if cond.max_pity is not None:
                 parts.append(f"保底计数≤{cond.max_pity}")
             return " 且 ".join(parts) if parts else "任意保底计数"
+        elif isinstance(cond, DefinitiveDrawCounterCondition):
+            parts = []
+            if cond.min_definitive is not None:
+                parts.append(f"大保底计数≥{cond.min_definitive}")
+            if cond.max_definitive is not None:
+                parts.append(f"大保底计数≤{cond.max_definitive}")
+            return " 且 ".join(parts) if parts else "任意大保底计数"
         return str(cond)
 
     def _action_to_chinese(
@@ -679,7 +783,10 @@ class DrawStrategy(BaseModel):
     ) -> str:
         """Convert an action to Chinese text, handling delegation recursively."""
         if isinstance(action, StopAction):
-            return "停止抽卡"
+            base = "停止抽卡"
+            if action.pay_override is not None:
+                base += f" (氪金: {'是' if action.pay_override else '否'})"
+            return base
         elif isinstance(action, ContinueAction):
             parts = []
             if action.min_draws_per_banner > 0:
@@ -694,6 +801,10 @@ class DrawStrategy(BaseModel):
                 parts.append(f"目标{action.target_potential}潜能")
             if action.target_pity:
                 parts.append(f"抽到{action.target_pity}保底计数")
+            if action.target_definitive_draw:
+                parts.append(f"抽到{action.target_definitive_draw}大保底计数")
+            if action.pay_override is not None:
+                parts.append(f"氪金: {'是' if action.pay_override else '否'}")
             return "继续抽卡" + (f" ({', '.join(parts)})" if parts else "")
         elif isinstance(action, DelegateAction):
             desc = f"执行策略「{action.strategy_name}」"

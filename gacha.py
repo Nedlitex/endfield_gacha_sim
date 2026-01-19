@@ -408,6 +408,7 @@ class Run(BaseModel):
         got_pity_without_main: bool = False,
         current_potential: int = 0,
         pity_counter: int = 0,
+        definitive_draw_counter: int = 0,
     ) -> bool:
         """Determine if we should continue drawing based on strategy rules.
 
@@ -421,6 +422,7 @@ class Run(BaseModel):
             got_pity_without_main: Whether pity was triggered without getting main.
             current_potential: Current number of copies of main operator obtained.
             pity_counter: Current pity counter (draws since last highest rarity).
+            definitive_draw_counter: Current definitive draw counter.
 
         Returns:
             True if we should continue drawing, False to stop.
@@ -440,6 +442,7 @@ class Run(BaseModel):
             current_potential=current_potential,
             banner_index=banner_index,
             pity_counter=pity_counter,
+            definitive_draw_counter=definitive_draw_counter,
         )
 
         # Build strategy registry for delegation lookup
@@ -453,6 +456,7 @@ class Run(BaseModel):
         banner: Banner,
         banner_index: int,
         pity_counter: int = 0,
+        definitive_draw_counter: int = 0,
     ) -> int:
         """Determine how many draws to perform (1 or 10).
 
@@ -461,6 +465,7 @@ class Run(BaseModel):
             banner: The banner being drawn on.
             banner_index: The 0-based index of the current banner.
             pity_counter: Current pity counter (draws since last highest rarity).
+            definitive_draw_counter: Current definitive draw counter.
 
         Returns:
             Number of draws to perform (1 or 10).
@@ -475,6 +480,7 @@ class Run(BaseModel):
             normal_draws=resource.normal_draws,
             banner_index=banner_index,
             pity_counter=pity_counter,
+            definitive_draw_counter=definitive_draw_counter,
         )
 
         # Build strategy registry for delegation lookup
@@ -483,6 +489,44 @@ class Run(BaseModel):
         return strategy.get_draw_amount(
             context, resource.total_available(), strategy_registry
         )
+
+    def _get_effective_pay(
+        self,
+        resource: BannerResource,
+        banner: Banner,
+        banner_index: int,
+        pity_counter: int = 0,
+        definitive_draw_counter: int = 0,
+    ) -> bool:
+        """Get effective pay setting considering action override.
+
+        Args:
+            resource: The current banner resource state.
+            banner: The banner being drawn on.
+            banner_index: The 0-based index of the current banner.
+            pity_counter: Current pity counter (draws since last highest rarity).
+            definitive_draw_counter: Current definitive draw counter.
+
+        Returns:
+            True if should pay for draws, False otherwise.
+        """
+        strategy = self._get_draw_strategy_for_banner(banner)
+        if not strategy:
+            return False
+
+        # Build evaluation context
+        context = EvaluationContext(
+            draws_accumulated=banner.draws_accumulated,
+            normal_draws=resource.normal_draws,
+            banner_index=banner_index,
+            pity_counter=pity_counter,
+            definitive_draw_counter=definitive_draw_counter,
+        )
+
+        # Build strategy registry for delegation lookup
+        strategy_registry = {s.name: s for s in self.banner_strategies.values()}
+
+        return strategy.get_effective_pay(context, strategy_registry)
 
     async def run_simulation_async(
         self,
@@ -656,8 +700,11 @@ class Run(BaseModel):
                         continue
 
                     # Priority 3: Check if we should continue with normal draws
-                    # Get current pity counter from banner
+                    # Get current counters from banner
                     current_pity = banner.reward_states[RewardType.PITY].counter
+                    current_definitive = banner.reward_states[
+                        RewardType.DEFINITIVE
+                    ].counter
                     if not self._should_continue_drawing(
                         resource=resource,
                         banner=banner,
@@ -668,6 +715,7 @@ class Run(BaseModel):
                         got_pity_without_main=got_pity_without_main,
                         current_potential=current_potential,
                         pity_counter=current_pity,
+                        definitive_draw_counter=current_definitive,
                     ):
                         break
 
@@ -677,12 +725,22 @@ class Run(BaseModel):
                         banner=banner,
                         banner_index=banner_index,
                         pity_counter=current_pity,
+                        definitive_draw_counter=current_definitive,
+                    )
+
+                    # Get effective pay setting (considers action override)
+                    effective_pay = self._get_effective_pay(
+                        resource=resource,
+                        banner=banner,
+                        banner_index=banner_index,
+                        pity_counter=current_pity,
+                        definitive_draw_counter=current_definitive,
                     )
 
                     # Consume from normal_draws, pay if needed
                     consumed = resource.consume_normal_draws(draw_amount)
                     shortfall = draw_amount - consumed
-                    if shortfall > 0:
+                    if shortfall > 0 and effective_pay:
                         # Need to pay for the shortfall
                         self.paid_draws += shortfall
 
