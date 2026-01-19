@@ -1,7 +1,14 @@
 """Default data creation functions."""
 
 from banner import Banner, EndFieldBannerTemplate, Operator
-from gacha import DrawStrategy
+from strategy import (
+    ContinueAction,
+    DrawBehavior,
+    DrawStrategy,
+    ResourceThresholdCondition,
+    StopAction,
+    StrategyRule,
+)
 
 
 def create_default_operators() -> list[Operator]:
@@ -97,4 +104,53 @@ def create_default_banners() -> list[Banner]:
 
 def create_default_strategy() -> DrawStrategy:
     """Create default strategy - pay to get UP."""
-    return DrawStrategy(name="默认策略(氪金抽到UP)", pay=True)
+    return DrawStrategy(
+        name="默认策略(氪金抽到UP)",
+        behavior=DrawBehavior(pay=True),
+        rules=[],
+        default_action=ContinueAction(stop_on_main=True),
+    )
+
+
+def create_default_strategies() -> list[DrawStrategy]:
+    """Create all default strategies."""
+    return [
+        # Default: pay to get UP
+        create_default_strategy(),
+        # Pay for exactly 30 draws
+        DrawStrategy(
+            name="氪金抽30抽",
+            behavior=DrawBehavior(pay=True),
+            rules=[],
+            default_action=ContinueAction(
+                min_draws_per_banner=30, max_draws_per_banner=30
+            ),
+        ),
+        # Pay for exactly 60 draws
+        DrawStrategy(
+            name="氪金抽60抽",
+            behavior=DrawBehavior(pay=True),
+            rules=[],
+            default_action=ContinueAction(
+                min_draws_per_banner=60, max_draws_per_banner=60
+            ),
+        ),
+        # Only draw if 120+ draws available, no pay, stop on UP
+        DrawStrategy(
+            name="没有120抽不抽(不氪金)",
+            behavior=DrawBehavior(pay=False),
+            rules=[
+                # If available draws < 120 at entry, skip this banner
+                StrategyRule(
+                    conditions=[
+                        ResourceThresholdCondition(
+                            max_normal_draws=119, check_once=True
+                        )
+                    ],
+                    action=StopAction(),
+                    priority=100,
+                ),
+            ],
+            default_action=ContinueAction(stop_on_main=True),
+        ),
+    ]

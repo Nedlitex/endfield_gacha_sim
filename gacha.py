@@ -4,6 +4,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from banner import Banner, DrawResult, Operator, RewardType
+from strategy import DrawStrategy, EvaluationContext
 
 
 class BannerResource(BaseModel):
@@ -123,49 +124,6 @@ class BannerResource(BaseModel):
         )
 
 
-class DrawStrategy(BaseModel):
-    """Configuration for automated drawing strategy on banners.
-
-    Defines rules for when to draw, how many draws to do, and when to stop.
-    Used by the simulation to determine drawing behavior on each banner.
-    """
-
-    name: str = Field("Strategy_Placeholder", description="Name of the strategy")
-    always_single_draw: bool = Field(
-        default=False, description="Always do a single draw instead of 10 draws"
-    )
-    single_draw_after: int = Field(
-        default=0, description="Start single draw after accumulated x draws"
-    )
-    skip_banner_threshold: int = Field(
-        default=0, description="Minimum amount of draws left to skip the current banner"
-    )
-    min_draws_after_main: list[tuple[int, int]] = Field(
-        default=[],
-        description="After getting the main operator, if current draw count is less than threshold (first value) continue drawing until reaching this threshold (second value)",
-    )
-    min_draws_after_pity: list[tuple[int, int]] = Field(
-        default=[],
-        description="After reaching pity but missing the main operator, if current draw count is less than threshold (first value) continue drawing until reaching this threshold (second value)",
-    )
-    min_draws_per_banner: int = Field(
-        default=0,
-        description="Minimum draws to each banner, skip_banner_threshold wins over this",
-    )
-    max_draws_per_banner: int = Field(
-        default=0,
-        description="Maximum draws per banner (0 means no limit)",
-    )
-    stop_on_main: bool = Field(
-        default=False,
-        description="Stop drawing immediately after getting the main operator",
-    )
-    pay: bool = Field(
-        default=False,
-        description="Pay when the rules cannot be satisfied (i.e. gain extra draws to fulfill the rules above)",
-    )
-
-
 class Player(BaseModel):
     """Represents a player's operator collection (box) across simulation runs.
 
@@ -220,7 +178,7 @@ class Player(BaseModel):
         banner: Banner,
         repeat: int,
         is_special_draw: bool = False,
-    ) -> tuple[int, int, bool, bool]:
+    ) -> tuple[int, int, bool, bool, bool, bool, int]:
         """Draw from banner and add operators to box.
 
         Args:
@@ -229,12 +187,19 @@ class Player(BaseModel):
             is_special_draw: Whether these are special draws
 
         Returns:
-            Tuple of [special draws rewarded, next banner draws rewarded, got main operator, got pity without main]
+            Tuple of [special draws rewarded, next banner draws rewarded,
+                      got main operator, got pity without main,
+                      got highest rarity, got highest rarity but not main,
+                      main operator copies obtained]
         """
         special_draw_reward_total = 0
         next_banner_reward_total = 0
         got_main = False
         got_pity_without_main = False
+        got_highest_rarity = False
+        got_highest_rarity_but_not_main = False
+        main_copies = 0
+        highest_rarity = max(banner.template.rarities)
         while repeat > 0:
             repeat -= 1
             result: DrawResult = banner.draw(is_special_draw=is_special_draw)
@@ -250,6 +215,18 @@ class Player(BaseModel):
                     banner_draw=banner.draws_accumulated,
                     is_special=is_special_draw,
                 )
+                # Track highest rarity obtained
+                if operator.rarity == highest_rarity:
+                    got_highest_rarity = True
+                    # Track if highest rarity but not main
+                    if (
+                        not banner.main_operator
+                        or operator.name != banner.main_operator.name
+                    ):
+                        got_highest_rarity_but_not_main = True
+                # Track main operator copies
+                if banner.main_operator and operator.name == banner.main_operator.name:
+                    main_copies += 1
             # Add potential reward as extra copies of main operator
             if result.reward.potential > 0 and banner.main_operator:
                 for _ in range(result.reward.potential):
@@ -258,6 +235,7 @@ class Player(BaseModel):
                         banner_draw=banner.draws_accumulated,
                         is_special=is_special_draw,
                     )
+                main_copies += result.reward.potential
             special_draw_reward_total += result.reward.special_draws
             next_banner_reward_total += result.reward.next_banner_draws
         return (
@@ -265,6 +243,9 @@ class Player(BaseModel):
             next_banner_reward_total,
             got_main,
             got_pity_without_main,
+            got_highest_rarity,
+            got_highest_rarity_but_not_main,
+            main_copies,
         )
 
     def merge(self, other_player: "Player"):
@@ -368,16 +349,24 @@ class Run(BaseModel):
         self,
         resource: BannerResource,
         banner: Banner,
+        banner_index: int,
         got_main: bool,
+        got_highest_rarity: bool = False,
+        got_highest_rarity_but_not_main: bool = False,
         got_pity_without_main: bool = False,
+        current_potential: int = 0,
     ) -> bool:
         """Determine if we should continue drawing based on strategy rules.
 
         Args:
             resource: The current banner resource state.
             banner: The banner being drawn on.
+            banner_index: The 0-based index of the current banner.
             got_main: Whether the main operator has been obtained.
+            got_highest_rarity: Whether any highest rarity has been obtained this banner.
+            got_highest_rarity_but_not_main: Whether highest rarity obtained but not main.
             got_pity_without_main: Whether pity was triggered without getting main.
+            current_potential: Current number of copies of main operator obtained.
 
         Returns:
             True if we should continue drawing, False to stop.
@@ -386,66 +375,35 @@ class Run(BaseModel):
         if not strategy:
             return False
 
-        draws_accumulated = banner.draws_accumulated
-        # For threshold checks, only count normal_draws (carryover resources)
-        # current_banner_draws and special_draws don't count for skip threshold
-        normal_available = resource.normal_draws
+        # Build evaluation context
+        context = EvaluationContext(
+            draws_accumulated=banner.draws_accumulated,
+            normal_draws=resource.normal_draws,
+            got_main=got_main,
+            got_highest_rarity=got_highest_rarity,
+            got_highest_rarity_but_not_main=got_highest_rarity_but_not_main,
+            got_pity_without_main=got_pity_without_main,
+            current_potential=current_potential,
+            banner_index=banner_index,
+        )
 
-        # Check max_draws_per_banner - if we've reached the max, stop drawing
-        if (
-            strategy.max_draws_per_banner > 0
-            and draws_accumulated >= strategy.max_draws_per_banner
-        ):
-            return False
+        # Build strategy registry for delegation lookup
+        strategy_registry = {s.name: s for s in self.banner_strategies.values()}
 
-        # Check stop_on_main - if we got main and this flag is set, stop immediately
-        if strategy.stop_on_main and got_main:
-            return False
-
-        # Check skip_banner_threshold - only considers normal_draws (carryover)
-        # If normal draws < threshold and can't pay, skip this banner
-        # But only if we've met min_draws_per_banner
-        if not strategy.pay and normal_available < strategy.skip_banner_threshold:
-            if draws_accumulated >= strategy.min_draws_per_banner:
-                return False
-
-        # If we got the main operator, check min_draws_after_main rules
-        if got_main:
-            target_draws = strategy.min_draws_per_banner
-            for threshold, target in strategy.min_draws_after_main:
-                if draws_accumulated >= threshold:
-                    target_draws = max(target_draws, target)
-
-            if draws_accumulated >= target_draws:
-                return False
-
-        # If we hit pity but missed the main operator, check min_draws_after_pity rules
-        if got_pity_without_main and not got_main:
-            target_draws = strategy.min_draws_per_banner
-            for threshold, target in strategy.min_draws_after_pity:
-                if draws_accumulated >= threshold:
-                    target_draws = max(target_draws, target)
-
-            if draws_accumulated >= target_draws:
-                return False
-
-        # Check if we have any draws available (or can pay)
-        total_available = resource.total_available()
-        if total_available <= 0 and not strategy.pay:
-            return False
-
-        return True
+        return strategy.should_continue_drawing(context, strategy_registry)
 
     def _get_draw_amount(
         self,
         resource: BannerResource,
         banner: Banner,
+        banner_index: int,
     ) -> int:
         """Determine how many draws to perform (1 or 10).
 
         Args:
             resource: The current banner resource state.
             banner: The banner being drawn on.
+            banner_index: The 0-based index of the current banner.
 
         Returns:
             Number of draws to perform (1 or 10).
@@ -454,20 +412,19 @@ class Run(BaseModel):
         if not strategy:
             return 1
 
-        draws_accumulated = banner.draws_accumulated
-        total_available = resource.total_available()
+        # Build evaluation context
+        context = EvaluationContext(
+            draws_accumulated=banner.draws_accumulated,
+            normal_draws=resource.normal_draws,
+            banner_index=banner_index,
+        )
 
-        if strategy.always_single_draw:
-            return 1
-        elif (
-            strategy.single_draw_after > 0
-            and draws_accumulated >= strategy.single_draw_after
-        ):
-            return 1
-        elif total_available >= 10 or strategy.pay:
-            return 10
-        else:
-            return 1
+        # Build strategy registry for delegation lookup
+        strategy_registry = {s.name: s for s in self.banner_strategies.values()}
+
+        return strategy.get_draw_amount(
+            context, resource.total_available(), strategy_registry
+        )
 
     async def run_simulation_async(
         self,
@@ -520,14 +477,17 @@ class Run(BaseModel):
             )
             inherited_reward_states: dict[RewardType, int] = {}
 
-            for banner in self.banners:
+            for banner_index, banner in enumerate(self.banners):
                 # Reset banner state for this simulation iteration
                 banner.reset(inherited_reward_states=inherited_reward_states)
 
                 # Track rewards earned during this banner for next banner
                 next_banner_reward_total = 0
                 got_main = False
+                got_highest_rarity = False
+                got_highest_rarity_but_not_main = False
                 got_pity_without_main = False
+                current_potential = 0  # Number of main operator copies obtained
 
                 # Add per-banner draw gains
                 if self.config:
@@ -546,7 +506,15 @@ class Run(BaseModel):
                         # Use all special draws at once (they come in multiples of reward count)
                         special_to_use = resource.special_draws
                         resource.consume_special_draws(special_to_use)
-                        special, reward, drew_main, pity_miss = player_iter.draw(
+                        (
+                            special,
+                            reward,
+                            drew_main,
+                            pity_miss,
+                            drew_hr,
+                            drew_hr_not_main,
+                            main_copies,
+                        ) = player_iter.draw(
                             banner=banner,
                             repeat=special_to_use,
                             is_special_draw=True,
@@ -555,7 +523,12 @@ class Run(BaseModel):
                         resource.add_special_draws(special)
                         next_banner_reward_total += reward
                         got_main = got_main or drew_main
+                        got_highest_rarity = got_highest_rarity or drew_hr
+                        got_highest_rarity_but_not_main = (
+                            got_highest_rarity_but_not_main or drew_hr_not_main
+                        )
                         got_pity_without_main = got_pity_without_main or pity_miss
+                        current_potential += main_copies
                         continue
 
                     # Priority 2: Use current_banner_draws (they don't carry over)
@@ -564,7 +537,15 @@ class Run(BaseModel):
                         # Use all current banner draws
                         current_to_use = resource.current_banner_draws
                         resource.consume_current_banner_draws(current_to_use)
-                        special, reward, drew_main, pity_miss = player_iter.draw(
+                        (
+                            special,
+                            reward,
+                            drew_main,
+                            pity_miss,
+                            drew_hr,
+                            drew_hr_not_main,
+                            main_copies,
+                        ) = player_iter.draw(
                             banner=banner,
                             repeat=current_to_use,
                             is_special_draw=False,
@@ -572,21 +553,30 @@ class Run(BaseModel):
                         resource.add_special_draws(special)
                         next_banner_reward_total += reward
                         got_main = got_main or drew_main
+                        got_highest_rarity = got_highest_rarity or drew_hr
+                        got_highest_rarity_but_not_main = (
+                            got_highest_rarity_but_not_main or drew_hr_not_main
+                        )
                         got_pity_without_main = got_pity_without_main or pity_miss
+                        current_potential += main_copies
                         continue
 
                     # Priority 3: Check if we should continue with normal draws
                     if not self._should_continue_drawing(
                         resource=resource,
                         banner=banner,
+                        banner_index=banner_index,
                         got_main=got_main,
+                        got_highest_rarity=got_highest_rarity,
+                        got_highest_rarity_but_not_main=got_highest_rarity_but_not_main,
                         got_pity_without_main=got_pity_without_main,
+                        current_potential=current_potential,
                     ):
                         break
 
                     # Determine draw amount (1 or 10)
                     draw_amount = self._get_draw_amount(
-                        resource=resource, banner=banner
+                        resource=resource, banner=banner, banner_index=banner_index
                     )
 
                     # Consume from normal_draws, pay if needed
@@ -597,7 +587,15 @@ class Run(BaseModel):
                         self.paid_draws += shortfall
 
                     # Draw the desired amount
-                    special, reward, drew_main, pity_miss = player_iter.draw(
+                    (
+                        special,
+                        reward,
+                        drew_main,
+                        pity_miss,
+                        drew_hr,
+                        drew_hr_not_main,
+                        main_copies,
+                    ) = player_iter.draw(
                         banner=banner,
                         repeat=draw_amount,
                         is_special_draw=False,
@@ -605,7 +603,12 @@ class Run(BaseModel):
                     resource.add_special_draws(special)
                     next_banner_reward_total += reward
                     got_main = got_main or drew_main
+                    got_highest_rarity = got_highest_rarity or drew_hr
+                    got_highest_rarity_but_not_main = (
+                        got_highest_rarity_but_not_main or drew_hr_not_main
+                    )
                     got_pity_without_main = got_pity_without_main or pity_miss
+                    current_potential += main_copies
 
                 # Track total draws for this banner
                 self.total_draws += banner.draws_accumulated_total

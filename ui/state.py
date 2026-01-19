@@ -7,11 +7,12 @@ import zlib
 import streamlit as st
 
 from banner import Banner, BannerTemplate, EndFieldBannerTemplate, Operator
-from gacha import Config, DrawStrategy, Player
+from gacha import Config, Player
+from strategy import deserialize_strategy, is_legacy_strategy
 from ui.defaults import (
     create_default_banners,
     create_default_operators,
-    create_default_strategy,
+    create_default_strategies,
 )
 
 
@@ -87,16 +88,22 @@ def initialize_session_state():
                     st.session_state.config = Config(**state.get("config", {}))
                 else:
                     st.session_state.config = Config()
-                # Load strategies
+                # Load strategies (skip legacy format strategies)
                 if "strategies" in state:
-                    st.session_state.strategies = [
-                        DrawStrategy(**s) for s in state.get("strategies", [])
-                    ]
-                    st.session_state.current_strategy_idx = state.get(
-                        "current_strategy_idx", 0
+                    new_strategies = []
+                    for s in state.get("strategies", []):
+                        if not is_legacy_strategy(s):
+                            new_strategies.append(deserialize_strategy(s))
+                    # If all strategies were legacy, use defaults
+                    if not new_strategies:
+                        new_strategies = create_default_strategies()
+                    st.session_state.strategies = new_strategies
+                    st.session_state.current_strategy_idx = min(
+                        state.get("current_strategy_idx", 0),
+                        len(new_strategies) - 1,
                     )
                 else:
-                    st.session_state.strategies = [create_default_strategy()]
+                    st.session_state.strategies = create_default_strategies()
                     st.session_state.current_strategy_idx = 0
                 # Load banner templates
                 if "banner_templates" in state and state["banner_templates"]:
@@ -140,7 +147,7 @@ def _initialize_defaults():
     st.session_state.banner_templates = [EndFieldBannerTemplate.model_copy(deep=True)]
     st.session_state.box = Player()
     st.session_state.config = Config()
-    st.session_state.strategies = [create_default_strategy()]
+    st.session_state.strategies = create_default_strategies()
     st.session_state.current_strategy_idx = 0
     st.session_state.run_banner_enabled = {}
     st.session_state.run_banner_strategies = {}

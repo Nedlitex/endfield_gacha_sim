@@ -1,8 +1,23 @@
-"""Strategy selector and editor component."""
+"""Strategy selector and editor component with advanced rule-based UI."""
 
 import streamlit as st
 
-from gacha import DrawStrategy
+from strategy import (
+    BannerIndexCondition,
+    ContinueAction,
+    DelegateAction,
+    DrawBehavior,
+    DrawCountCondition,
+    DrawStrategy,
+    GotHighestRarityButNotMainCondition,
+    GotHighestRarityCondition,
+    GotMainCondition,
+    GotPityWithoutMainCondition,
+    ResourceThresholdCondition,
+    StopAction,
+    StrategyCondition,
+    StrategyRule,
+)
 from ui.state import update_url
 
 
@@ -11,28 +26,10 @@ def _get_current_strategy() -> DrawStrategy:
     return st.session_state.strategies[st.session_state.current_strategy_idx]
 
 
-def _on_strategy_change():
-    """Callback when strategy settings change."""
-    strategy = _get_current_strategy()
-    strategy_key_prefix = f"strategy_{st.session_state.current_strategy_idx}_"
-    strategy.always_single_draw = st.session_state[
-        f"{strategy_key_prefix}always_single_draw"
-    ]
-    strategy.single_draw_after = st.session_state[
-        f"{strategy_key_prefix}single_draw_after"
-    ]
-    strategy.skip_banner_threshold = st.session_state[
-        f"{strategy_key_prefix}skip_banner_threshold"
-    ]
-    strategy.min_draws_per_banner = st.session_state[
-        f"{strategy_key_prefix}min_draws_per_banner"
-    ]
-    strategy.max_draws_per_banner = st.session_state[
-        f"{strategy_key_prefix}max_draws_per_banner"
-    ]
-    strategy.stop_on_main = st.session_state[f"{strategy_key_prefix}stop_on_main"]
-    strategy.pay = st.session_state[f"{strategy_key_prefix}pay"]
-    update_url()
+def _get_other_strategy_names() -> list[str]:
+    """Get names of other strategies (for delegation)."""
+    current = _get_current_strategy()
+    return [s.name for s in st.session_state.strategies if s.name != current.name]
 
 
 def render_strategy_section():
@@ -68,7 +65,7 @@ def render_strategy_section():
         if is_default_strategy:
             # Show read-only view for default strategy
             st.info(
-                "💡 这是默认策略，不可编辑。请在下方输入新策略名称并点击「创建策略」来创建自定义策略。"
+                "这是默认策略，不可编辑。点击下方「创建新策略」按钮创建自定义策略。"
             )
             st.markdown("**策略说明:** 氪金抽到UP（抽数不足时额外获得抽数以满足规则）")
         else:
@@ -79,315 +76,585 @@ def render_strategy_section():
 
 
 def _render_strategy_editor(current_strategy: DrawStrategy):
-    """Render the strategy editor for custom strategies."""
-    # Use strategy index in keys to avoid cross-strategy contamination
+    """Render the advanced strategy editor."""
     strategy_key_prefix = f"strategy_{st.session_state.current_strategy_idx}_"
 
-    # Number inputs row 1
-    col3, col4 = st.columns(2)
-    with col3:
-        st.number_input(
-            "每池最少抽数",
-            min_value=0,
-            value=current_strategy.min_draws_per_banner,
-            step=1,
-            key=f"{strategy_key_prefix}min_draws_per_banner",
-            on_change=_on_strategy_change,
-        )
-    with col4:
-        st.number_input(
-            "每池最多抽数",
-            min_value=0,
-            value=current_strategy.max_draws_per_banner,
-            step=1,
-            key=f"{strategy_key_prefix}max_draws_per_banner",
-            on_change=_on_strategy_change,
-            help="每个卡池最多抽取的次数(0表示无限制)",
-        )
+    # === Behavior Section ===
+    st.markdown("### 抽卡行为")
+    always_single = st.checkbox(
+        "始终单抽",
+        value=current_strategy.behavior.always_single_draw,
+        key=f"{strategy_key_prefix}always_single_draw",
+        help="始终单抽(特殊10连除外)",
+    )
+    single_after = st.number_input(
+        "累计抽数后单抽",
+        min_value=0,
+        value=current_strategy.behavior.single_draw_after,
+        step=1,
+        key=f"{strategy_key_prefix}single_draw_after",
+        help="累计抽数达到此值后开始单抽(0=不启用)",
+    )
+    pay = st.checkbox(
+        "氪金",
+        value=current_strategy.behavior.pay,
+        key=f"{strategy_key_prefix}pay",
+        help="抽数不足时额外获得抽数以满足规则",
+    )
 
-    # Number inputs row 2
-    col5, col6 = st.columns(2)
-    with col5:
-        st.number_input(
-            "跳池阈值",
-            min_value=0,
-            value=current_strategy.skip_banner_threshold,
-            step=1,
-            key=f"{strategy_key_prefix}skip_banner_threshold",
-            on_change=_on_strategy_change,
-            help="剩余抽数低于此值时跳过当前卡池",
-        )
-    with col6:
-        st.number_input(
-            "累计抽数后单抽",
-            min_value=0,
-            value=current_strategy.single_draw_after,
-            step=1,
-            key=f"{strategy_key_prefix}single_draw_after",
-            on_change=_on_strategy_change,
-            help="累计抽数达到此值后开始单抽(特殊10连除外)",
-        )
+    # Update behavior if changed
+    new_behavior = DrawBehavior(
+        always_single_draw=always_single,
+        single_draw_after=single_after,
+        pay=pay,
+    )
+    if new_behavior != current_strategy.behavior:
+        current_strategy.behavior = new_behavior
+        update_url()
 
-    # Checkboxes row
-    col7, col8, col9 = st.columns(3)
-    with col7:
-        st.checkbox(
-            "抽到UP后停止",
-            value=current_strategy.stop_on_main,
-            key=f"{strategy_key_prefix}stop_on_main",
-            on_change=_on_strategy_change,
-            help="获得UP干员后立即停止抽取当前卡池",
-        )
-    with col8:
-        st.checkbox(
-            "始终单抽",
-            value=current_strategy.always_single_draw,
-            key=f"{strategy_key_prefix}always_single_draw",
-            on_change=_on_strategy_change,
-            help="始终单抽(特殊10连除外)",
-        )
-    with col9:
-        st.checkbox(
-            "氪金",
-            value=current_strategy.pay,
-            key=f"{strategy_key_prefix}pay",
-            on_change=_on_strategy_change,
-            help="抽数不足时额外获得抽数以满足规则",
-        )
+    # === Rules Section ===
+    st.markdown("### 策略规则")
+    st.caption("规则按优先级从高到低执行，第一个匹配的规则生效")
 
-    # min_draws_after_main rules
-    _render_after_main_rules(current_strategy)
+    # Render existing rules
+    rules_to_remove = []
 
-    # min_draws_after_pity rules
-    _render_after_pity_rules(current_strategy)
+    for idx, rule in enumerate(current_strategy.rules):
+        with st.container():
+            st.markdown(f"**规则 {idx + 1}** (优先级: {rule.priority})")
+            col_rule, col_delete = st.columns([5, 1])
 
-    # Generate strategy summary button
-    _render_strategy_summary(current_strategy)
+            with col_rule:
+                _render_rule_summary(rule)
+
+            with col_delete:
+                if st.button("删除", key=f"{strategy_key_prefix}delete_rule_{idx}"):
+                    rules_to_remove.append(idx)
+
+            st.divider()
+
+    # Remove rules marked for deletion
+    if rules_to_remove:
+        for idx in sorted(rules_to_remove, reverse=True):
+            current_strategy.rules.pop(idx)
+        update_url()
+        st.rerun()
+
+    # Add new rule button
+    if st.button("添加规则", key=f"{strategy_key_prefix}add_rule"):
+        st.session_state[f"{strategy_key_prefix}adding_rule"] = True
+
+    # New rule editor
+    if st.session_state.get(f"{strategy_key_prefix}adding_rule", False):
+        _render_new_rule_editor(current_strategy, strategy_key_prefix)
+
+    # === Default Action Section ===
+    st.markdown("### 默认行为")
+    st.caption("当没有规则匹配时执行此行为")
+    _render_default_action_editor(current_strategy, strategy_key_prefix)
 
 
-def _render_after_main_rules(current_strategy: DrawStrategy):
-    """Render the after-main rules section."""
-    st.subheader("获得UP后规则")
-    st.caption("当前抽数 >= 阈值时，获得UP后继续抽至目标抽数")
+def _render_rule_summary(rule: StrategyRule):
+    """Render a summary of a rule."""
+    # Conditions
+    if rule.conditions:
+        cond_texts = []
+        for cond in rule.conditions:
+            cond_texts.append(_condition_to_text(cond))
+        conditions_str = " 且 ".join(cond_texts)
+    else:
+        conditions_str = "始终"
 
-    # Display existing rules
-    for idx, (threshold, target) in enumerate(current_strategy.min_draws_after_main):
-        col1, col2 = st.columns([5, 1])
+    # Action
+    action_str = _action_to_text(rule.action)
+
+    st.markdown(f"**条件:** {conditions_str}")
+    st.markdown(f"**动作:** {action_str}")
+
+
+def _condition_to_text(cond: StrategyCondition) -> str:
+    """Convert a condition to human-readable text."""
+    if isinstance(cond, DrawCountCondition):
+        parts = []
+        if cond.min_draws is not None:
+            parts.append(f"已用抽数(不含特殊抽)>={cond.min_draws}")
+        if cond.max_draws is not None:
+            parts.append(f"已用抽数(不含特殊抽)<={cond.max_draws}")
+        return " 且 ".join(parts) if parts else "任意已用抽数"
+    elif isinstance(cond, GotMainCondition):
+        return "已获得UP" if cond.value else "未获得UP"
+    elif isinstance(cond, GotHighestRarityCondition):
+        return "已获得最高星级" if cond.value else "未获得最高星级"
+    elif isinstance(cond, GotHighestRarityButNotMainCondition):
+        return "歪了(出最高星级但非UP)" if cond.value else "未歪最高星级"
+    elif isinstance(cond, ResourceThresholdCondition):
+        parts = []
+        if cond.min_normal_draws is not None:
+            parts.append(f"可用抽数>={cond.min_normal_draws}")
+        if cond.max_normal_draws is not None:
+            parts.append(f"可用抽数<={cond.max_normal_draws}")
+        base = " 且 ".join(parts) if parts else "任意可用抽数"
+        if cond.check_once:
+            return f"{base}(仅入池时检查)"
+        return base
+    elif isinstance(cond, GotPityWithoutMainCondition):
+        return "歪了(保底未出UP)" if cond.value else "未歪"
+    elif isinstance(cond, BannerIndexCondition):
+        if cond.every_n <= 1:
+            return "每个池子"
+        return f"每{cond.every_n}个池子"
+    return str(cond)
+
+
+def _action_to_text(action) -> str:
+    """Convert an action to human-readable text."""
+    if isinstance(action, StopAction):
+        return "停止抽卡"
+    elif isinstance(action, ContinueAction):
+        parts = []
+        if action.min_draws_per_banner > 0:
+            parts.append(f"至少抽到{action.min_draws_per_banner}抽")
+        if action.max_draws_per_banner and action.max_draws_per_banner > 0:
+            parts.append(f"最多抽到{action.max_draws_per_banner}抽")
+        if action.stop_on_main:
+            parts.append("抽到UP后停止")
+        if action.stop_on_highest_rarity:
+            parts.append("抽到最高星级后停止")
+        if action.target_potential:
+            parts.append(f"目标{action.target_potential}潜能")
+        return "继续抽卡" + (f" ({', '.join(parts)})" if parts else "")
+    elif isinstance(action, DelegateAction):
+        return f"执行策略「{action.strategy_name}」"
+    return str(action)
+
+
+def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
+    """Render the new rule editor."""
+    st.markdown("#### 添加新规则")
+
+    # Priority
+    priority = st.number_input(
+        "优先级",
+        min_value=0,
+        max_value=100,
+        value=50,
+        step=1,
+        key=f"{prefix}new_rule_priority",
+        help="数值越大优先级越高",
+    )
+
+    # Conditions
+    st.markdown("**条件 (全部满足时触发)**")
+
+    # Draw count condition (draws used on current banner, excluding special draws)
+    use_draw_count = st.checkbox(
+        "已用抽数条件",
+        key=f"{prefix}new_rule_use_draw_count",
+        help="当前池已消耗的抽数(不含特殊抽)",
+    )
+    draw_count_min = None
+    draw_count_max = None
+    if use_draw_count:
+        col1, col2 = st.columns(2)
         with col1:
-            st.text(f"获得UP后若当前抽数>={threshold}则继续抽至{target}")
+            draw_count_min = st.number_input(
+                "最小已用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_draw_count_min",
+            )
+            if draw_count_min == 0:
+                draw_count_min = None
         with col2:
-            if st.button("删除", key=f"delete_rule_{idx}"):
-                current_strategy.min_draws_after_main.pop(idx)
+            draw_count_max = st.number_input(
+                "最大已用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_draw_count_max",
+                help="0表示不限制",
+            )
+            if draw_count_max == 0:
+                draw_count_max = None
+
+    # Got main condition
+    use_got_main = st.checkbox("UP获取条件", key=f"{prefix}new_rule_use_got_main")
+    got_main_value = True
+    if use_got_main:
+        got_main_value = st.radio(
+            "UP状态",
+            [True, False],
+            format_func=lambda x: "已获得UP" if x else "未获得UP",
+            key=f"{prefix}new_rule_got_main_value",
+            horizontal=True,
+        )
+
+    # Got highest rarity condition
+    use_got_highest_rarity = st.checkbox(
+        "最高星级获取条件", key=f"{prefix}new_rule_use_got_highest_rarity"
+    )
+    got_highest_rarity_value = True
+    if use_got_highest_rarity:
+        got_highest_rarity_value = st.radio(
+            "最高星级状态",
+            [True, False],
+            format_func=lambda x: "已获得最高星级" if x else "未获得最高星级",
+            key=f"{prefix}new_rule_got_highest_rarity_value",
+            horizontal=True,
+        )
+
+    # Got highest rarity but not main condition
+    use_got_hr_not_main = st.checkbox(
+        "歪最高星级条件", key=f"{prefix}new_rule_use_got_hr_not_main"
+    )
+    got_hr_not_main_value = True
+    if use_got_hr_not_main:
+        got_hr_not_main_value = st.radio(
+            "歪最高星级状态",
+            [True, False],
+            format_func=lambda x: "歪了(出最高星级但非UP)" if x else "未歪最高星级",
+            key=f"{prefix}new_rule_got_hr_not_main_value",
+            horizontal=True,
+        )
+
+    # Resource threshold condition (available draws that carry over)
+    use_resource = st.checkbox(
+        "可用抽数条件",
+        key=f"{prefix}new_rule_use_resource",
+        help="可跨池继承的剩余抽数",
+    )
+    resource_min = None
+    resource_max = None
+    resource_check_once = False
+    if use_resource:
+        col1, col2 = st.columns(2)
+        with col1:
+            resource_min = st.number_input(
+                "最小可用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_resource_min",
+            )
+            if resource_min == 0:
+                resource_min = None
+        with col2:
+            resource_max = st.number_input(
+                "最大可用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_resource_max",
+                help="0表示不限制",
+            )
+            if resource_max == 0:
+                resource_max = None
+        resource_check_once = st.checkbox(
+            "仅入池时检查",
+            key=f"{prefix}new_rule_resource_check_once",
+            help="勾选后仅在进入池子时检查一次，之后不再检查",
+        )
+
+    # Pity without main condition
+    use_pity = st.checkbox("歪了条件", key=f"{prefix}new_rule_use_pity")
+    pity_value = True
+    if use_pity:
+        pity_value = st.radio(
+            "歪了状态",
+            [True, False],
+            format_func=lambda x: "歪了(保底未出UP)" if x else "未歪",
+            key=f"{prefix}new_rule_pity_value",
+            horizontal=True,
+        )
+
+    # Banner index condition
+    use_banner_index = st.checkbox(
+        "池子序号条件",
+        key=f"{prefix}new_rule_use_banner_index",
+        help="仅在特定序号的池子生效(从第1个池子开始计数)",
+    )
+    banner_every_n = 0
+    if use_banner_index:
+        banner_every_n = st.number_input(
+            "每N个池子",
+            min_value=0,
+            value=2,
+            step=1,
+            key=f"{prefix}new_rule_banner_every_n",
+            help="0=每个池子, 2=第1,3,5...个池子, 3=第1,4,7...个池子",
+        )
+
+    # Action
+    st.markdown("**动作**")
+    action_type = st.selectbox(
+        "动作类型",
+        ["stop", "continue", "delegate"],
+        format_func=lambda x: {
+            "stop": "停止抽卡",
+            "continue": "继续抽卡",
+            "delegate": "执行其他策略",
+        }[x],
+        key=f"{prefix}new_rule_action_type",
+    )
+
+    action = None
+    if action_type == "stop":
+        action = StopAction()
+    elif action_type == "continue":
+        col1, col2 = st.columns(2)
+        with col1:
+            min_draws = st.number_input(
+                "至少抽到",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_action_min_draws",
+                help="抽到此数量前不会停止",
+            )
+        with col2:
+            max_draws = st.number_input(
+                "最多抽到",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_action_max_draws",
+                help="抽到此数量后停止(0=不限制)",
+            )
+
+        col3, col4 = st.columns(2)
+        with col3:
+            stop_on_main = st.checkbox(
+                "抽到UP后停止",
+                key=f"{prefix}new_rule_action_stop_on_main",
+            )
+        with col4:
+            stop_on_highest_rarity = st.checkbox(
+                "抽到最高星级后停止",
+                key=f"{prefix}new_rule_action_stop_on_highest_rarity",
+            )
+
+        target_potential = st.number_input(
+            "目标潜能",
+            min_value=0,
+            max_value=6,
+            value=0,
+            step=1,
+            key=f"{prefix}new_rule_action_target_potential",
+            help="0表示不限制潜能",
+        )
+
+        action = ContinueAction(
+            min_draws_per_banner=min_draws,
+            max_draws_per_banner=max_draws if max_draws > 0 else None,
+            stop_on_main=stop_on_main,
+            stop_on_highest_rarity=stop_on_highest_rarity,
+            target_potential=target_potential if target_potential > 0 else None,
+        )
+    elif action_type == "delegate":
+        other_strategies = _get_other_strategy_names()
+        if other_strategies:
+            delegate_to = st.selectbox(
+                "执行策略",
+                other_strategies,
+                key=f"{prefix}new_rule_action_delegate_to",
+            )
+            action = DelegateAction(strategy_name=delegate_to)
+        else:
+            st.warning("没有其他可用策略")
+            action = None
+
+    # Buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("确认添加", key=f"{prefix}confirm_add_rule"):
+            if action is not None:
+                # Build conditions
+                conditions: list[StrategyCondition] = []
+                if use_draw_count and (
+                    draw_count_min is not None or draw_count_max is not None
+                ):
+                    conditions.append(
+                        DrawCountCondition(
+                            min_draws=draw_count_min,
+                            max_draws=draw_count_max,
+                        )
+                    )
+                if use_got_main:
+                    conditions.append(GotMainCondition(value=got_main_value))
+                if use_got_highest_rarity:
+                    conditions.append(
+                        GotHighestRarityCondition(value=got_highest_rarity_value)
+                    )
+                if use_got_hr_not_main:
+                    conditions.append(
+                        GotHighestRarityButNotMainCondition(value=got_hr_not_main_value)
+                    )
+                if use_resource and (
+                    resource_min is not None or resource_max is not None
+                ):
+                    conditions.append(
+                        ResourceThresholdCondition(
+                            min_normal_draws=resource_min,
+                            max_normal_draws=resource_max,
+                            check_once=resource_check_once,
+                        )
+                    )
+                if use_pity:
+                    conditions.append(GotPityWithoutMainCondition(value=pity_value))
+                if use_banner_index:
+                    conditions.append(BannerIndexCondition(every_n=banner_every_n))
+
+                # Create rule
+                new_rule = StrategyRule(
+                    conditions=conditions,
+                    action=action,
+                    priority=priority,
+                )
+                current_strategy.rules.append(new_rule)
+                # Sort by priority
+                current_strategy.rules.sort(key=lambda r: -r.priority)
+                st.session_state[f"{prefix}adding_rule"] = False
                 update_url()
                 st.rerun()
 
-    # Add new rule
-    col1, col2 = st.columns(2)
-    with col1:
-        new_threshold = st.number_input(
-            "阈值", min_value=0, value=0, step=1, key="new_rule_threshold"
-        )
     with col2:
-        new_target = st.number_input(
-            "目标", min_value=0, value=0, step=1, key="new_rule_target"
-        )
-    if st.button("添加规则"):
-        if new_threshold > 0 and new_target > 0:
-            current_strategy.min_draws_after_main.append((new_threshold, new_target))
-            update_url()
+        if st.button("取消", key=f"{prefix}cancel_add_rule"):
+            st.session_state[f"{prefix}adding_rule"] = False
             st.rerun()
 
 
-def _render_after_pity_rules(current_strategy: DrawStrategy):
-    """Render the after-pity rules section."""
-    st.subheader("小保底歪了后规则")
-    st.caption("当前抽数 >= 阈值时，歪了(触发小保底但未获得UP)后继续抽至目标抽数")
+def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
+    """Render the default action editor."""
+    action = current_strategy.default_action
 
-    # Display existing rules
-    for idx, (threshold, target) in enumerate(current_strategy.min_draws_after_pity):
-        col1, col2 = st.columns([5, 1])
+    action_type = st.selectbox(
+        "默认动作类型",
+        ["stop", "continue", "delegate"],
+        index=(
+            0
+            if isinstance(action, StopAction)
+            else (1 if isinstance(action, ContinueAction) else 2)
+        ),
+        format_func=lambda x: {
+            "stop": "停止抽卡",
+            "continue": "继续抽卡",
+            "delegate": "执行其他策略",
+        }[x],
+        key=f"{prefix}default_action_type",
+    )
+
+    new_action = None
+    if action_type == "stop":
+        new_action = StopAction()
+    elif action_type == "continue":
+        # Get current values if action is ContinueAction
+        current_min = (
+            action.min_draws_per_banner if isinstance(action, ContinueAction) else 0
+        )
+        current_max = (
+            action.max_draws_per_banner if isinstance(action, ContinueAction) else None
+        )
+        current_stop = (
+            action.stop_on_main if isinstance(action, ContinueAction) else False
+        )
+        current_stop_hr = (
+            action.stop_on_highest_rarity
+            if isinstance(action, ContinueAction)
+            else False
+        )
+        current_potential = (
+            action.target_potential if isinstance(action, ContinueAction) else None
+        )
+
+        col1, col2 = st.columns(2)
         with col1:
-            st.text(f"歪了后若当前抽数>={threshold}则继续抽至{target}")
+            min_draws = st.number_input(
+                "至少抽到",
+                min_value=0,
+                value=current_min,
+                step=1,
+                key=f"{prefix}default_action_min_draws",
+                help="抽到此数量前不会停止",
+            )
         with col2:
-            if st.button("删除", key=f"delete_pity_rule_{idx}"):
-                current_strategy.min_draws_after_pity.pop(idx)
-                update_url()
-                st.rerun()
+            max_draws = st.number_input(
+                "最多抽到",
+                min_value=0,
+                value=current_max if current_max else 0,
+                step=1,
+                key=f"{prefix}default_action_max_draws",
+                help="抽到此数量后停止(0=不限制)",
+            )
 
-    # Add new rule
-    col1, col2 = st.columns(2)
-    with col1:
-        new_pity_threshold = st.number_input(
-            "阈值", min_value=0, value=0, step=1, key="new_pity_rule_threshold"
+        col3, col4 = st.columns(2)
+        with col3:
+            stop_on_main = st.checkbox(
+                "抽到UP后停止",
+                value=current_stop,
+                key=f"{prefix}default_action_stop_on_main",
+            )
+        with col4:
+            stop_on_highest_rarity = st.checkbox(
+                "抽到最高星级后停止",
+                value=current_stop_hr,
+                key=f"{prefix}default_action_stop_on_highest_rarity",
+            )
+
+        target_potential = st.number_input(
+            "目标潜能",
+            min_value=0,
+            max_value=6,
+            value=current_potential if current_potential else 0,
+            step=1,
+            key=f"{prefix}default_action_target_potential",
+            help="0表示不限制潜能",
         )
-    with col2:
-        new_pity_target = st.number_input(
-            "目标", min_value=0, value=0, step=1, key="new_pity_rule_target"
+
+        new_action = ContinueAction(
+            min_draws_per_banner=min_draws,
+            max_draws_per_banner=max_draws if max_draws > 0 else None,
+            stop_on_main=stop_on_main,
+            stop_on_highest_rarity=stop_on_highest_rarity,
+            target_potential=target_potential if target_potential > 0 else None,
         )
-    if st.button(label="添加规则", key="pity"):
-        if new_pity_threshold > 0 and new_pity_target > 0:
-            current_strategy.min_draws_after_pity.append(
-                (new_pity_threshold, new_pity_target)
+    elif action_type == "delegate":
+        other_strategies = _get_other_strategy_names()
+        if other_strategies:
+            current_delegate = (
+                action.strategy_name
+                if isinstance(action, DelegateAction)
+                else other_strategies[0]
             )
-            update_url()
-            st.rerun()
-
-
-def _render_strategy_summary(current_strategy: DrawStrategy):
-    """Render the strategy summary generator."""
-    if st.button("生成策略说明"):
-        paragraphs = []
-        paragraphs.append(f"【{current_strategy.name}】")
-        config = st.session_state.config
-        resource_desc = f"玩家初始拥有{config.initial_draws}抽"
-        if config.draws_gain_per_banner > 0:
-            resource_desc += f"，每期卡池额外获得{config.draws_gain_per_banner}抽"
-        if config.draws_gain_this_banner > 0:
-            resource_desc += (
-                f"，每期卡池额外获得{config.draws_gain_this_banner}限定抽(仅限当期使用)"
+            if current_delegate not in other_strategies:
+                current_delegate = other_strategies[0]
+            delegate_to = st.selectbox(
+                "执行策略",
+                other_strategies,
+                index=(
+                    other_strategies.index(current_delegate)
+                    if current_delegate in other_strategies
+                    else 0
+                ),
+                key=f"{prefix}default_action_delegate_to",
             )
-        resource_desc += "。"
-        paragraphs.append(resource_desc)
+            new_action = DelegateAction(strategy_name=delegate_to)
+        else:
+            st.warning("没有其他可用策略，无法使用委托动作")
+            new_action = StopAction()
 
-        if current_strategy.min_draws_per_banner > 0:
-            paragraphs.append(
-                f"每个卡池至少抽{current_strategy.min_draws_per_banner}抽。"
-            )
-
-        if current_strategy.max_draws_per_banner > 0:
-            paragraphs.append(
-                f"每个卡池最多抽{current_strategy.max_draws_per_banner}抽。"
-            )
-
-        if current_strategy.stop_on_main:
-            paragraphs.append("获得UP干员后立即停止抽取当前卡池。")
-
-        if current_strategy.skip_banner_threshold > 0:
-            paragraphs.append(
-                f"当剩余抽数低于{current_strategy.skip_banner_threshold}时，"
-                "跳过当前卡池不再抽取。"
-            )
-
-        if current_strategy.always_single_draw:
-            paragraphs.append("抽卡时始终单抽，特殊10连除外。")
-        elif current_strategy.single_draw_after > 0:
-            paragraphs.append(
-                f"当累计抽数达到{current_strategy.single_draw_after}后，"
-                "改为单抽以节省资源，特殊10连除外。"
-            )
-
-        if current_strategy.min_draws_after_main:
-            rules_desc = []
-            for threshold, target in current_strategy.min_draws_after_main:
-                rules_desc.append(f"若当前抽数>={threshold}则继续抽至{target}抽")
-            paragraphs.append(f"获得UP干员后，{'；'.join(rules_desc)}。")
-
-        if current_strategy.min_draws_after_pity:
-            rules_desc = []
-            for threshold, target in current_strategy.min_draws_after_pity:
-                rules_desc.append(f"若当前抽数>={threshold}则继续抽至{target}抽")
-            paragraphs.append(
-                f"歪了(触发小保底但未获得UP)后，{'；'.join(rules_desc)}。"
-            )
-
-        if current_strategy.pay:
-            paragraphs.append(":red[**抽数不足时氪金补充抽数以满足规则。**]")
-
-        st.info("\n\n".join(paragraphs))
+    # Update if changed
+    if new_action is not None and new_action != current_strategy.default_action:
+        current_strategy.default_action = new_action
+        update_url()
 
 
 def _render_strategy_creation():
     """Render the strategy creation and deletion section."""
-    col_create, col_delete = st.columns(2)
+    col_create, col_delete, col_desc = st.columns(3)
     with col_create:
         with st.popover("创建新策略", use_container_width=True):
-            st.subheader("创建抽卡策略")
-
-            new_strategy_name = st.text_input(
-                "策略名称",
-                value="自定义策略",
-                key="new_strategy_name",
-            )
-
-            st.markdown("**抽数限制**")
-            col1, col2 = st.columns(2)
-            with col1:
-                new_min_draws = st.number_input(
-                    "每池最少抽数",
-                    min_value=0,
-                    value=0,
-                    step=1,
-                    key="new_strategy_min_draws",
-                )
-            with col2:
-                new_max_draws = st.number_input(
-                    "每池最多抽数",
-                    min_value=0,
-                    value=0,
-                    step=1,
-                    key="new_strategy_max_draws",
-                    help="0表示无限制",
-                )
-
-            st.markdown("**抽卡行为**")
-            col3, col4 = st.columns(2)
-            with col3:
-                new_skip_threshold = st.number_input(
-                    "跳池阈值",
-                    min_value=0,
-                    value=0,
-                    step=1,
-                    key="new_strategy_skip_threshold",
-                    help="剩余抽数低于此值时跳过当前卡池",
-                )
-            with col4:
-                new_single_after = st.number_input(
-                    "累计抽数后单抽",
-                    min_value=0,
-                    value=0,
-                    step=1,
-                    key="new_strategy_single_after",
-                    help="累计抽数达到此值后开始单抽",
-                )
-
-            col5, col6, col7 = st.columns(3)
-            with col5:
-                new_stop_on_main = st.checkbox(
-                    "抽到UP后停止",
-                    value=True,
-                    key="new_strategy_stop_on_main",
-                )
-            with col6:
-                new_always_single = st.checkbox(
-                    "始终单抽",
-                    value=False,
-                    key="new_strategy_always_single",
-                )
-            with col7:
-                new_pay = st.checkbox(
-                    "氪金",
-                    value=False,
-                    key="new_strategy_pay",
-                    help="抽数不足时额外获得抽数",
-                )
-
-            if st.button("创建策略", key="create_strategy_btn"):
-                if new_strategy_name:
-                    new_strategy = DrawStrategy(
-                        name=new_strategy_name,
-                        min_draws_per_banner=new_min_draws,
-                        max_draws_per_banner=new_max_draws,
-                        skip_banner_threshold=new_skip_threshold,
-                        single_draw_after=new_single_after,
-                        stop_on_main=new_stop_on_main,
-                        always_single_draw=new_always_single,
-                        pay=new_pay,
-                    )
-                    st.session_state.strategies.append(new_strategy)
-                    new_idx = len(st.session_state.strategies) - 1
-                    st.session_state.current_strategy_idx = new_idx
-                    update_url()
-                    st.rerun()
+            _render_strategy_creation_dialog()
 
     with col_delete:
         # Delete strategy button (only if more than one strategy exists and not default)
@@ -403,3 +670,471 @@ def _render_strategy_creation():
                 )
                 update_url()
                 st.rerun()
+
+    with col_desc:
+        # Show strategy description button
+        with st.popover("查看策略说明", use_container_width=True):
+            current_strategy = _get_current_strategy()
+            strategy_registry = {s.name: s for s in st.session_state.strategies}
+            description = current_strategy.get_description(strategy_registry)
+            st.code(description, language=None)
+
+
+def _render_strategy_creation_dialog():
+    """Render the strategy creation dialog with full condition support."""
+    prefix = "new_strategy_"
+
+    st.subheader("创建抽卡策略")
+
+    new_strategy_name = st.text_input(
+        "策略名称",
+        value="自定义策略",
+        key=f"{prefix}name",
+    )
+
+    # === Behavior Section ===
+    st.markdown("**抽卡行为**")
+    new_always_single = st.checkbox(
+        "始终单抽",
+        value=False,
+        key=f"{prefix}always_single",
+    )
+    new_single_after = st.number_input(
+        "累计抽数后单抽",
+        min_value=0,
+        value=0,
+        step=1,
+        key=f"{prefix}single_after",
+    )
+    new_pay = st.checkbox(
+        "氪金",
+        value=False,
+        key=f"{prefix}pay",
+    )
+
+    # === Rules Section ===
+    st.markdown("**策略规则**")
+    st.caption("规则按优先级从高到低执行，第一个匹配的规则生效")
+
+    # Initialize rules list in session state if not present
+    if f"{prefix}rules" not in st.session_state:
+        st.session_state[f"{prefix}rules"] = []
+
+    # Display existing rules
+    rules_to_remove = []
+    for idx, rule in enumerate(st.session_state[f"{prefix}rules"]):
+        with st.container():
+            col_rule, col_del = st.columns([5, 1])
+            with col_rule:
+                st.markdown(f"**规则 {idx + 1}** (优先级: {rule.priority})")
+                _render_rule_summary(rule)
+            with col_del:
+                if st.button("删除", key=f"{prefix}del_rule_{idx}"):
+                    rules_to_remove.append(idx)
+
+    # Remove rules marked for deletion
+    if rules_to_remove:
+        for idx in sorted(rules_to_remove, reverse=True):
+            st.session_state[f"{prefix}rules"].pop(idx)
+        # Clear the adding_rule checkbox to reset the editor state
+        if f"{prefix}adding_rule" in st.session_state:
+            st.session_state[f"{prefix}adding_rule"] = False
+        st.rerun()
+
+    # Add rule toggle
+    if st.checkbox("添加新规则", key=f"{prefix}adding_rule"):
+        _render_creation_rule_editor(prefix)
+
+    # === Default Action Section ===
+    st.markdown("**默认行为**")
+    st.caption("当没有规则匹配时执行此行为")
+
+    default_action_type = st.selectbox(
+        "默认动作类型",
+        ["continue", "stop"],
+        format_func=lambda x: {"stop": "停止抽卡", "continue": "继续抽卡"}[x],
+        key=f"{prefix}default_action_type",
+    )
+
+    new_default_action = None
+    if default_action_type == "stop":
+        new_default_action = StopAction()
+    else:
+        col4, col5 = st.columns(2)
+        with col4:
+            new_stop_on_main = st.checkbox(
+                "抽到UP后停止",
+                value=True,
+                key=f"{prefix}stop_on_main",
+            )
+        with col5:
+            new_stop_on_highest_rarity = st.checkbox(
+                "抽到最高星级后停止",
+                value=False,
+                key=f"{prefix}stop_on_highest_rarity",
+            )
+
+        col6, col7 = st.columns(2)
+        with col6:
+            new_min_draws = st.number_input(
+                "至少抽到",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}min_draws",
+                help="抽到此数量前不会停止",
+            )
+        with col7:
+            new_max_draws = st.number_input(
+                "最多抽到",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}max_draws",
+                help="抽到此数量后停止(0=不限制)",
+            )
+
+        new_target_potential = st.number_input(
+            "目标潜能",
+            min_value=0,
+            max_value=6,
+            value=0,
+            step=1,
+            key=f"{prefix}target_potential",
+            help="0表示不限制",
+        )
+
+        new_default_action = ContinueAction(
+            min_draws_per_banner=new_min_draws,
+            max_draws_per_banner=new_max_draws if new_max_draws > 0 else None,
+            stop_on_main=new_stop_on_main,
+            stop_on_highest_rarity=new_stop_on_highest_rarity,
+            target_potential=new_target_potential if new_target_potential > 0 else None,
+        )
+
+    # Check for duplicate name
+    existing_names = [s.name for s in st.session_state.strategies]
+    name_exists = new_strategy_name in existing_names
+
+    if name_exists:
+        st.error(f"策略名称「{new_strategy_name}」已存在，请使用其他名称")
+
+    # Build preview strategy for description
+    preview_strategy = DrawStrategy(
+        name=new_strategy_name,
+        behavior=DrawBehavior(
+            always_single_draw=new_always_single,
+            single_draw_after=new_single_after,
+            pay=new_pay,
+        ),
+        rules=list(st.session_state.get(f"{prefix}rules", [])),
+        default_action=new_default_action if new_default_action else ContinueAction(),
+    )
+
+    # Preview and Create buttons
+    col_preview, col_create = st.columns(2)
+    with col_preview:
+        with st.popover("预览策略", use_container_width=True):
+            strategy_registry = {s.name: s for s in st.session_state.strategies}
+            description = preview_strategy.get_description(strategy_registry)
+            st.code(description, language=None)
+
+    with col_create:
+        if st.button(
+            "创建策略",
+            key=f"{prefix}create_btn",
+            disabled=name_exists,
+            use_container_width=True,
+        ):
+            if new_strategy_name and not name_exists and new_default_action is not None:
+                st.session_state.strategies.append(preview_strategy)
+                new_idx = len(st.session_state.strategies) - 1
+                st.session_state.current_strategy_idx = new_idx
+                # Clear the rules list for next creation
+                st.session_state[f"{prefix}rules"] = []
+                update_url()
+                st.rerun()
+
+
+def _render_creation_rule_editor(prefix: str):
+    """Render the rule editor for strategy creation dialog."""
+    st.markdown("##### 新规则配置")
+
+    rule_prefix = f"{prefix}rule_"
+
+    # Priority
+    priority = st.number_input(
+        "优先级",
+        min_value=0,
+        max_value=100,
+        value=50,
+        step=1,
+        key=f"{rule_prefix}priority",
+        help="数值越大优先级越高",
+    )
+
+    # === Conditions ===
+    st.markdown("**条件 (全部满足时触发)**")
+
+    # Draw count condition (draws used on current banner, excluding special draws)
+    use_draw_count = st.checkbox(
+        "已用抽数条件",
+        key=f"{rule_prefix}use_draw_count",
+        help="当前池已消耗的抽数(不含特殊抽)",
+    )
+    draw_count_min = None
+    draw_count_max = None
+    if use_draw_count:
+        col1, col2 = st.columns(2)
+        with col1:
+            draw_count_min = st.number_input(
+                "最小已用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}draw_count_min",
+            )
+            if draw_count_min == 0:
+                draw_count_min = None
+        with col2:
+            draw_count_max = st.number_input(
+                "最大已用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}draw_count_max",
+                help="0表示不限制",
+            )
+            if draw_count_max == 0:
+                draw_count_max = None
+
+    # Got main condition
+    use_got_main = st.checkbox("UP获取条件", key=f"{rule_prefix}use_got_main")
+    got_main_value = True
+    if use_got_main:
+        got_main_value = st.radio(
+            "UP状态",
+            [True, False],
+            format_func=lambda x: "已获得UP" if x else "未获得UP",
+            key=f"{rule_prefix}got_main_value",
+            horizontal=True,
+        )
+
+    # Got highest rarity condition
+    use_got_hr = st.checkbox("最高星级获取条件", key=f"{rule_prefix}use_got_hr")
+    got_hr_value = True
+    if use_got_hr:
+        got_hr_value = st.radio(
+            "最高星级状态",
+            [True, False],
+            format_func=lambda x: "已获得最高星级" if x else "未获得最高星级",
+            key=f"{rule_prefix}got_hr_value",
+            horizontal=True,
+        )
+
+    # Got highest rarity but not main condition
+    use_got_hr_not_main = st.checkbox(
+        "歪最高星级条件", key=f"{rule_prefix}use_got_hr_not_main"
+    )
+    got_hr_not_main_value = True
+    if use_got_hr_not_main:
+        got_hr_not_main_value = st.radio(
+            "歪最高星级状态",
+            [True, False],
+            format_func=lambda x: "歪了(出最高星级但非UP)" if x else "未歪最高星级",
+            key=f"{rule_prefix}got_hr_not_main_value",
+            horizontal=True,
+        )
+
+    # Resource threshold condition (available draws that carry over)
+    use_resource = st.checkbox(
+        "可用抽数条件",
+        key=f"{rule_prefix}use_resource",
+        help="可跨池继承的剩余抽数",
+    )
+    resource_min = None
+    resource_max = None
+    resource_check_once = False
+    if use_resource:
+        col1, col2 = st.columns(2)
+        with col1:
+            resource_min = st.number_input(
+                "最小可用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}resource_min",
+            )
+            if resource_min == 0:
+                resource_min = None
+        with col2:
+            resource_max = st.number_input(
+                "最大可用抽数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}resource_max",
+                help="0表示不限制",
+            )
+            if resource_max == 0:
+                resource_max = None
+        resource_check_once = st.checkbox(
+            "仅入池时检查",
+            key=f"{rule_prefix}resource_check_once",
+            help="勾选后仅在进入池子时检查一次，之后不再检查",
+        )
+
+    # Pity without main condition
+    use_pity = st.checkbox("歪了条件", key=f"{rule_prefix}use_pity")
+    pity_value = True
+    if use_pity:
+        pity_value = st.radio(
+            "歪了状态",
+            [True, False],
+            format_func=lambda x: "歪了(保底未出UP)" if x else "未歪",
+            key=f"{rule_prefix}pity_value",
+            horizontal=True,
+        )
+
+    # Banner index condition
+    use_banner_index = st.checkbox(
+        "池子序号条件",
+        key=f"{rule_prefix}use_banner_index",
+        help="仅在特定序号的池子生效(从第1个池子开始计数)",
+    )
+    banner_every_n = 0
+    if use_banner_index:
+        banner_every_n = st.number_input(
+            "每N个池子",
+            min_value=0,
+            value=2,
+            step=1,
+            key=f"{rule_prefix}banner_every_n",
+            help="0=每个池子, 2=第1,3,5...个池子, 3=第1,4,7...个池子",
+        )
+
+    # === Action ===
+    st.markdown("**动作**")
+    action_type = st.selectbox(
+        "动作类型",
+        ["stop", "continue", "delegate"],
+        format_func=lambda x: {
+            "stop": "停止抽卡",
+            "continue": "继续抽卡",
+            "delegate": "执行其他策略",
+        }[x],
+        key=f"{rule_prefix}action_type",
+    )
+
+    action = None
+    if action_type == "stop":
+        action = StopAction()
+    elif action_type == "continue":
+        col1, col2 = st.columns(2)
+        with col1:
+            min_draws = st.number_input(
+                "至少抽到",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}action_min_draws",
+                help="抽到此数量前不会停止",
+            )
+        with col2:
+            max_draws = st.number_input(
+                "最多抽到",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}action_max_draws",
+                help="抽到此数量后停止(0=不限制)",
+            )
+
+        col3, col4 = st.columns(2)
+        with col3:
+            stop_on_main = st.checkbox(
+                "抽到UP后停止",
+                key=f"{rule_prefix}action_stop_on_main",
+            )
+        with col4:
+            stop_on_hr = st.checkbox(
+                "抽到最高星级后停止",
+                key=f"{rule_prefix}action_stop_on_hr",
+            )
+
+        target_pot = st.number_input(
+            "目标潜能",
+            min_value=0,
+            max_value=6,
+            value=0,
+            step=1,
+            key=f"{rule_prefix}action_target_potential",
+            help="0表示不限制潜能",
+        )
+
+        action = ContinueAction(
+            min_draws_per_banner=min_draws,
+            max_draws_per_banner=max_draws if max_draws > 0 else None,
+            stop_on_main=stop_on_main,
+            stop_on_highest_rarity=stop_on_hr,
+            target_potential=target_pot if target_pot > 0 else None,
+        )
+    elif action_type == "delegate":
+        # Get all strategy names except the one being created
+        other_strategies = [s.name for s in st.session_state.strategies]
+        if other_strategies:
+            delegate_to = st.selectbox(
+                "执行策略",
+                other_strategies,
+                key=f"{rule_prefix}action_delegate_to",
+            )
+            action = DelegateAction(strategy_name=delegate_to)
+        else:
+            st.warning("没有其他可用策略")
+            action = None
+
+    # Add rule button
+    if st.button("添加此规则", key=f"{rule_prefix}add_btn"):
+        if action is not None:
+            # Build conditions
+            conditions: list[StrategyCondition] = []
+            if use_draw_count and (
+                draw_count_min is not None or draw_count_max is not None
+            ):
+                conditions.append(
+                    DrawCountCondition(
+                        min_draws=draw_count_min,
+                        max_draws=draw_count_max,
+                    )
+                )
+            if use_got_main:
+                conditions.append(GotMainCondition(value=got_main_value))
+            if use_got_hr:
+                conditions.append(GotHighestRarityCondition(value=got_hr_value))
+            if use_got_hr_not_main:
+                conditions.append(
+                    GotHighestRarityButNotMainCondition(value=got_hr_not_main_value)
+                )
+            if use_resource and (resource_min is not None or resource_max is not None):
+                conditions.append(
+                    ResourceThresholdCondition(
+                        min_normal_draws=resource_min,
+                        max_normal_draws=resource_max,
+                        check_once=resource_check_once,
+                    )
+                )
+            if use_pity:
+                conditions.append(GotPityWithoutMainCondition(value=pity_value))
+            if use_banner_index:
+                conditions.append(BannerIndexCondition(every_n=banner_every_n))
+
+            # Create rule
+            new_rule = StrategyRule(
+                conditions=conditions,
+                action=action,
+                priority=priority,
+            )
+            st.session_state[f"{prefix}rules"].append(new_rule)
+            # Sort by priority
+            st.session_state[f"{prefix}rules"].sort(key=lambda r: -r.priority)
+            st.rerun()
