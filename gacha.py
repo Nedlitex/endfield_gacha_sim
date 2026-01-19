@@ -3,11 +3,15 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from banner import Banner, Operator
+from banner import Banner, DrawResult, Operator, RewardType
 
 
 class DrawStrategy(BaseModel):
-    """Strategy for how to draw on a banner"""
+    """Configuration for automated drawing strategy on banners.
+
+    Defines rules for when to draw, how many draws to do, and when to stop.
+    Used by the simulation to determine drawing behavior on each banner.
+    """
 
     name: str = Field("Strategy_Placeholder", description="Name of the strategy")
     always_single_draw: bool = Field(
@@ -46,6 +50,13 @@ class DrawStrategy(BaseModel):
 
 
 class Player(BaseModel):
+    """Represents a player's operator collection (box) across simulation runs.
+
+    Tracks all operators obtained, their potential (number of copies), and
+    statistics about when each operator was first drawn. Used to aggregate
+    results across multiple simulation iterations.
+    """
+
     operators: dict[int, dict[str, Operator]] = Field(
         {}, description="Operators in the box by rarity"
     )
@@ -76,8 +87,12 @@ class Player(BaseModel):
             new_op.first_draw_total = banner_draw
             new_op.first_draw_count = 1
             # Record which bucket this first draw falls into
-            bucket = (banner_draw // 10) * 10
-            new_op.draw_buckets = {bucket: 1}
+            # Use -1 as special bucket for special draws
+            if is_special:
+                new_op.draw_buckets = {-1: 1}
+            else:
+                bucket = (banner_draw // 10) * 10
+                new_op.draw_buckets = {bucket: 1}
             self.operators[operator.rarity][operator.name] = new_op
         self.operators[operator.rarity][operator.name].drawn_by_special_count += (
             1 if is_special else 0
@@ -105,35 +120,29 @@ class Player(BaseModel):
         got_pity_without_main = False
         while repeat > 0:
             repeat -= 1
-            (
-                operator,
-                potential_reward,
-                special_draw_reward,
-                next_banner_reward,
-                got_main_this_draw,
-                triggered_pity,
-            ) = banner.draw(is_special_draw=is_special_draw)
-            got_main = got_main or got_main_this_draw
+            result: DrawResult = banner.draw(is_special_draw=is_special_draw)
+            got_main = got_main or result.got_main
             # Track if pity was triggered but main was not obtained
-            if triggered_pity and not got_main_this_draw:
+            if result.triggered_pity and not result.got_main:
                 got_pity_without_main = True
             # Use draws_accumulated (excludes special draws) for fair comparison
             # This matches the definitive draw guarantee which is based on non-special draws
-            self._add_operator_to_box(
-                operator=operator,
-                banner_draw=banner.draws_accumulated,
-                is_special=is_special_draw,
-            )
-            # Note that because the definitive draw is less than the reward draw, an actual operator must exist before the
-            # reward.
-            if potential_reward and banner.main_operator:
+            for operator in result.reward.operators:
                 self._add_operator_to_box(
-                    operator=banner.main_operator,
+                    operator=operator,
                     banner_draw=banner.draws_accumulated,
                     is_special=is_special_draw,
                 )
-            special_draw_reward_total += special_draw_reward
-            next_banner_reward_total += next_banner_reward
+            # Add potential reward as extra copies of main operator
+            if result.reward.potential > 0 and banner.main_operator:
+                for _ in range(result.reward.potential):
+                    self._add_operator_to_box(
+                        operator=banner.main_operator,
+                        banner_draw=banner.draws_accumulated,
+                        is_special=is_special_draw,
+                    )
+            special_draw_reward_total += result.reward.special_draws
+            next_banner_reward_total += result.reward.next_banner_draws
         return (
             special_draw_reward_total,
             next_banner_reward_total,
@@ -175,6 +184,12 @@ class Player(BaseModel):
 
 
 class Config(BaseModel):
+    """Configuration for the simulation's resource economy.
+
+    Defines how many draws the player starts with and how many they gain
+    per banner period.
+    """
+
     initial_draws: int = Field(
         default=0, description="Number of draws player get initially"
     )
@@ -184,6 +199,20 @@ class Config(BaseModel):
 
 
 class Run(BaseModel):
+    """Main simulation runner that executes gacha simulations across multiple banners.
+
+    Manages the simulation state, applies drawing strategies to each banner,
+    and aggregates results across multiple iterations.
+
+    Attributes:
+        paid_draws: Total number of paid pulls across all simulation runs.
+        total_draws: Total number of all draws (paid + free) across all runs.
+        config: Economy configuration for draws available.
+        banner_strategies: Per-banner strategy overrides, keyed by banner name.
+        banners: List of banners to simulate drawing on, in order.
+        repeat: Number of simulation iterations to run.
+    """
+
     paid_draws: int = Field(
         default=0, description="Total number of paid pulls in this run"
     )
@@ -201,7 +230,14 @@ class Run(BaseModel):
     repeat: int = Field(default=1, description="Total number of simulations to run")
 
     def _get_draw_strategy_for_banner(self, banner: Banner) -> Optional[DrawStrategy]:
-        """Get the draw strategy for a banner."""
+        """Get the draw strategy configured for a specific banner.
+
+        Args:
+            banner: The banner to get the strategy for.
+
+        Returns:
+            The DrawStrategy for this banner, or None if not configured.
+        """
         if banner.name in self.banner_strategies:
             return self.banner_strategies[banner.name]
         return None
@@ -213,9 +249,19 @@ class Run(BaseModel):
         got_main: bool,
         got_pity_without_main: bool = False,
     ) -> int:
-        """
-        Determine the next draw amount based on draw strategy rules.
-        Returns 0 to stop drawing on this banner.
+        """Determine the next draw amount based on the banner's strategy rules.
+
+        Evaluates all strategy rules to decide whether to continue drawing and
+        how many draws to perform (1 or 10).
+
+        Args:
+            current_available: Number of draws currently available to the player.
+            banner: The banner being drawn on.
+            got_main: Whether the main operator has been obtained.
+            got_pity_without_main: Whether pity was triggered without getting main.
+
+        Returns:
+            Number of draws to perform (1, 10, or 0 to stop drawing).
         """
         strategy = self._get_draw_strategy_for_banner(banner)
         if not strategy:
@@ -288,12 +334,24 @@ class Run(BaseModel):
         yield_every: int = 100,
         progress_callback=None,
     ) -> Player:
-        """Async version of run_simulation that yields control periodically.
+        """Run the gacha simulation asynchronously across all configured banners.
+
+        Executes multiple simulation iterations, drawing on each banner according
+        to its configured strategy. Yields control periodically to allow UI updates.
+
+        The simulation:
+        1. Iterates through banners in order
+        2. Applies drawing strategy to determine draw behavior
+        3. Tracks pity/definitive/potential counters with inheritance between banners
+        4. Aggregates operator statistics across all iterations
 
         Args:
-            player: Optional player to merge results into
-            yield_every: Yield control every N iterations
-            progress_callback: Optional callback(current, total) to report progress
+            player: Optional Player instance to merge results into. If None, creates new.
+            yield_every: Number of iterations between yielding control to event loop.
+            progress_callback: Optional callback(current, total) to report progress.
+
+        Returns:
+            Player instance with aggregated results from all simulation iterations.
         """
         if not player:
             player = Player()
@@ -311,10 +369,10 @@ class Run(BaseModel):
             available_draws = 0 if not self.config else self.config.initial_draws
             repeat -= 1
             iteration += 1
-            pity_draw_to_next_banner = 0
+            inherited_reward_states: dict[RewardType, int] = {}
             for banner in self.banners:
                 # Reset banner state for this simulation iteration
-                banner.reset(pity_draw_counter=pity_draw_to_next_banner)
+                banner.reset(inherited_reward_states=inherited_reward_states)
                 # For each banner, first clear out the special draw as they don't carry over.
                 special_draw = 0
                 reward_for_next = 0
@@ -377,7 +435,7 @@ class Run(BaseModel):
                 # Continue to next banner, track total draws for this banner
                 self.total_draws += banner.draws_accumulated_total
                 reward_draw = reward_for_next
-                pity_draw_to_next_banner = banner.get_pity_draw_for_next_banner()
+                inherited_reward_states = banner.get_inherited_reward_states()
             # Finish one iteration. Merge the box.
             player.merge(other_player=player_iter)
 

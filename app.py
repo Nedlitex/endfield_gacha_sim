@@ -6,7 +6,16 @@ import zlib
 import pandas as pd
 import streamlit as st
 
-from banner import Banner, Operator
+from banner import (
+    Banner,
+    BannerTemplate,
+    EndFieldBannerTemplate,
+    InheritPolicy,
+    Operator,
+    RarityProbability,
+    RepeatPolicy,
+    ResetCondition,
+)
 from gacha import Config, DrawStrategy, Player, Run
 
 st.set_page_config(page_title="终末地抽卡策略模拟器", layout="wide")
@@ -39,7 +48,7 @@ def create_default_operators() -> list[Operator]:
 
 
 def create_default_banners() -> list[Banner]:
-    """创建默认卡池列表"""
+    """创建默认卡池列表，使用终末地卡池模板"""
     # Get default operators grouped by rarity
     default_ops = create_default_operators()
     base_operators: dict[int, list[Operator]] = {}
@@ -62,7 +71,12 @@ def create_default_banners() -> list[Banner]:
         4: base_operators.get(4, []).copy(),
     }
     banners.append(
-        Banner(name="熔火灼痕", operators=banner1_ops, main_operator=Laevatain)  # type: ignore
+        Banner(
+            name="熔火灼痕",
+            operators=banner1_ops,
+            main_operator=Laevatain,
+            template=EndFieldBannerTemplate.model_copy(deep=True),
+        )  # type: ignore
     )
 
     # Banner 2: 轻飘飘的信使 - 洁尔佩塔 main
@@ -72,7 +86,12 @@ def create_default_banners() -> list[Banner]:
         4: base_operators.get(4, []).copy(),
     }
     banners.append(
-        Banner(name="轻飘飘的信使", operators=banner2_ops, main_operator=Gilberta)  # type: ignore
+        Banner(
+            name="轻飘飘的信使",
+            operators=banner2_ops,
+            main_operator=Gilberta,
+            template=EndFieldBannerTemplate.model_copy(deep=True),
+        )  # type: ignore
     )
 
     # Banner 3: 热烈色彩 - 伊冯 main
@@ -82,7 +101,12 @@ def create_default_banners() -> list[Banner]:
         4: base_operators.get(4, []).copy(),
     }
     banners.append(
-        Banner(name="热烈色彩", operators=banner3_ops, main_operator=Yvonne)  # type: ignore
+        Banner(
+            name="热烈色彩",
+            operators=banner3_ops,
+            main_operator=Yvonne,
+            template=EndFieldBannerTemplate.model_copy(deep=True),
+        )  # type: ignore
     )
 
     return banners
@@ -111,6 +135,9 @@ def serialize_state() -> str:
     state = {
         "operators": [op.model_dump() for op in st.session_state.operators],
         "banners": [banner.model_dump() for banner in st.session_state.banners],
+        "banner_templates": [
+            t.model_dump() for t in st.session_state.get("banner_templates", [])
+        ],
         "box": st.session_state.box.model_dump(),
         "config": st.session_state.config.model_dump(),
         "strategies": [s.model_dump() for s in st.session_state.strategies],
@@ -172,6 +199,15 @@ if "initialized" not in st.session_state:
             else:
                 st.session_state.strategies = [create_default_strategy()]
                 st.session_state.current_strategy_idx = 0
+            # Load banner templates
+            if "banner_templates" in state and state["banner_templates"]:
+                st.session_state.banner_templates = [
+                    BannerTemplate(**t) for t in state["banner_templates"]
+                ]
+            else:
+                st.session_state.banner_templates = [
+                    EndFieldBannerTemplate.model_copy(deep=True)
+                ]
             # Load run state
             st.session_state.run_banner_enabled = state.get("run_banner_enabled", {})
             st.session_state.run_banner_strategies = state.get(
@@ -193,6 +229,9 @@ if "initialized" not in st.session_state:
         except Exception:
             st.session_state.operators = create_default_operators()
             st.session_state.banners = create_default_banners()
+            st.session_state.banner_templates = [
+                EndFieldBannerTemplate.model_copy(deep=True)
+            ]
             st.session_state.box = Player()
             st.session_state.config = Config()
             st.session_state.strategies = [create_default_strategy()]
@@ -202,6 +241,9 @@ if "initialized" not in st.session_state:
     else:
         st.session_state.operators = create_default_operators()
         st.session_state.banners = create_default_banners()
+        st.session_state.banner_templates = [
+            EndFieldBannerTemplate.model_copy(deep=True)
+        ]
         st.session_state.box = Player()
         st.session_state.config = Config()
         st.session_state.strategies = [create_default_strategy()]
@@ -262,6 +304,14 @@ with st.sidebar:
     banner_name = st.text_input(
         "卡池名称", value=f"卡池_{len(st.session_state.banners) + 1}"
     )
+    # Template selection for new banner
+    template_names = [t.name for t in st.session_state.banner_templates]
+    selected_template_idx = st.selectbox(
+        "卡池模板",
+        range(len(template_names)),
+        format_func=lambda x: template_names[x],
+        key="new_banner_template",
+    )
     if st.button("创建卡池"):
         # Add all default operators to the new banner
         default_ops = create_default_operators()
@@ -270,7 +320,12 @@ with st.sidebar:
             if op.rarity not in banner_operators:
                 banner_operators[op.rarity] = []
             banner_operators[op.rarity].append(op)
-        new_banner = Banner(name=banner_name, operators=banner_operators)  # type: ignore
+        selected_template = st.session_state.banner_templates[selected_template_idx]
+        new_banner = Banner(
+            name=banner_name,
+            operators=banner_operators,
+            template=selected_template.model_copy(deep=True),
+        )  # type: ignore
         st.session_state.banners.append(new_banner)
         update_url()
         st.rerun()
@@ -310,10 +365,12 @@ with st.sidebar:
             if main_op.name not in existing_names:
                 banner_operators[main_op.rarity].insert(0, main_op)
 
+        selected_template = st.session_state.banner_templates[selected_template_idx]
         new_banner = Banner(
             name=f"卡池_{banner_idx}",
             operators=banner_operators,
             main_operator=dummy_main,
+            template=selected_template.model_copy(deep=True),
         )  # type: ignore
         st.session_state.banners.append(new_banner)
         update_url()
@@ -443,6 +500,267 @@ with st.sidebar:
             st.rerun()
     else:
         st.info("暂无卡池")
+
+    st.divider()
+
+    st.header("卡池模板管理")
+
+    # Show existing templates
+    if st.session_state.banner_templates:
+        for idx, template in enumerate(st.session_state.banner_templates):
+            with st.expander(f"📋 {template.name}", expanded=False):
+                st.markdown(f"**{template.name}**")
+                st.caption(
+                    f"稀有度: {', '.join(str(r) + '星' for r in sorted(template.rarities))}"
+                )
+                # Show key parameters
+                if template.has_pity_draw:
+                    st.caption(
+                        f"小保底: 第{template.pity_draw_start + 1}抽开始提升, 第{template.pity_draw_limit}抽必出"
+                    )
+                if template.has_definitive_draw:
+                    st.caption(f"大保底: 第{template.definitive_draw_count}抽必得UP")
+                if template.has_potential_reward:
+                    st.caption(f"潜能奖励: 每{template.potential_reward_draw}抽")
+
+                # Delete button (don't allow deleting the last template)
+                if len(st.session_state.banner_templates) > 1:
+                    if st.button("删除模板", key=f"delete_template_{idx}"):
+                        st.session_state.banner_templates.pop(idx)
+                        update_url()
+                        st.rerun()
+
+    # Create new template popup
+    with st.popover("创建新模板", use_container_width=True):
+        st.subheader("创建卡池模板")
+
+        new_template_name = st.text_input(
+            "模板名称", value="自定义模板", key="new_template_name"
+        )
+
+        st.markdown("**稀有度设置**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            prob_r4 = st.number_input(
+                "4星概率",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.912,
+                step=0.01,
+                key="prob_r4",
+            )
+        with col2:
+            prob_r5 = st.number_input(
+                "5星概率",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.08,
+                step=0.01,
+                key="prob_r5",
+            )
+        with col3:
+            prob_r6 = st.number_input(
+                "6星概率",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.008,
+                step=0.001,
+                format="%.3f",
+                key="prob_r6",
+            )
+
+        main_prob = st.number_input(
+            "UP干员概率",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            step=0.1,
+            key="main_prob",
+            help="抽到对应稀有度时，获得UP干员的概率",
+        )
+
+        st.markdown("**小保底设置**")
+        has_pity = st.checkbox("启用小保底", value=True, key="has_pity")
+        pity_start = 66
+        pity_limit = 80
+        pity_boost = 0.05
+        pity_inherit_policy = InheritPolicy.NO_INHERIT
+        pity_repeat_policy = RepeatPolicy.NO_REPEAT
+        pity_reset_condition = ResetCondition.ON_HIGHEST_RARITY
+        if has_pity:
+            col1, col2 = st.columns(2)
+            with col1:
+                pity_start = st.number_input(
+                    "概率提升起始", min_value=1, value=66, key="pity_start"
+                )
+            with col2:
+                pity_limit = st.number_input(
+                    "小保底抽数", min_value=1, value=80, key="pity_limit"
+                )
+            pity_boost = st.number_input(
+                "每抽提升幅度",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.05,
+                step=0.01,
+                key="pity_boost",
+            )
+            pity_inherit = st.selectbox(
+                "小保底继承",
+                [
+                    ("不继承", InheritPolicy.NO_INHERIT),
+                    ("继承至下一期", InheritPolicy.INHERIT_TO_NEXT),
+                    ("永久继承", InheritPolicy.ALWAYS_INHERIT),
+                ],
+                format_func=lambda x: x[0],
+                key="pity_inherit",
+            )
+            pity_repeat = st.selectbox(
+                "小保底重复",
+                [
+                    ("不可重复", RepeatPolicy.NO_REPEAT),
+                    ("可重复", RepeatPolicy.ALWAYS_REPEAT),
+                ],
+                format_func=lambda x: x[0],
+                key="pity_repeat",
+            )
+            pity_reset = st.selectbox(
+                "小保底重置条件",
+                [
+                    ("抽到最高星时", ResetCondition.ON_HIGHEST_RARITY),
+                    ("抽到UP时", ResetCondition.ON_MAIN),
+                    ("无", ResetCondition.NONE),
+                ],
+                format_func=lambda x: x[0],
+                key="pity_reset",
+            )
+            pity_inherit_policy = pity_inherit[1]
+            pity_repeat_policy = pity_repeat[1]
+            pity_reset_condition = pity_reset[1]
+
+        st.markdown("**大保底设置**")
+        has_definitive = st.checkbox("启用大保底", value=True, key="has_definitive")
+        definitive_count = 120
+        definitive_inherit_policy = InheritPolicy.NO_INHERIT
+        definitive_reset_condition = ResetCondition.NONE
+        if has_definitive:
+            definitive_count = st.number_input(
+                "大保底抽数", min_value=1, value=120, key="definitive_count"
+            )
+            definitive_inherit = st.selectbox(
+                "大保底继承",
+                [
+                    ("不继承", InheritPolicy.NO_INHERIT),
+                    ("继承至下一期", InheritPolicy.INHERIT_TO_NEXT),
+                    ("永久继承", InheritPolicy.ALWAYS_INHERIT),
+                ],
+                format_func=lambda x: x[0],
+                key="definitive_inherit",
+            )
+            definitive_reset = st.selectbox(
+                "大保底重置条件",
+                [
+                    ("抽到UP时", ResetCondition.ON_MAIN),
+                    ("抽到最高星时", ResetCondition.ON_HIGHEST_RARITY),
+                    ("无", ResetCondition.NONE),
+                ],
+                format_func=lambda x: x[0],
+                key="definitive_reset",
+            )
+            definitive_inherit_policy = definitive_inherit[1]
+            definitive_reset_condition = definitive_reset[1]
+
+        st.markdown("**潜能奖励设置**")
+        has_potential = st.checkbox("启用潜能奖励", value=True, key="has_potential")
+        potential_draw = 240
+        if has_potential:
+            potential_draw = st.number_input(
+                "奖励间隔抽数", min_value=1, value=240, key="potential_draw"
+            )
+
+        st.markdown("**特殊抽奖励设置**")
+        col1, col2 = st.columns(2)
+        with col1:
+            special_draw_reward_at = st.number_input(
+                "特殊抽奖励抽数",
+                min_value=0,
+                value=30,
+                key="special_draw_reward_at",
+                help="累计抽数达到此值时获得特殊抽奖励(0表示禁用)",
+            )
+        with col2:
+            special_draw_reward_count = st.number_input(
+                "特殊抽奖励数量", min_value=0, value=10, key="special_draw_reward_count"
+            )
+        special_draw_repeat = st.checkbox(
+            "可重复触发",
+            value=False,
+            key="special_draw_repeat",
+            help="特殊抽奖励是否可以在同一卡池内多次触发",
+        )
+
+        st.markdown("**下期卡池抽奖励设置**")
+        col1, col2 = st.columns(2)
+        with col1:
+            next_banner_draw_reward_at = st.number_input(
+                "下期抽奖励抽数",
+                min_value=0,
+                value=60,
+                key="next_banner_draw_reward_at",
+                help="累计抽数达到此值时获得下期卡池抽奖励(0表示禁用)",
+            )
+        with col2:
+            next_banner_draw_reward_count = st.number_input(
+                "下期抽奖励数量",
+                min_value=0,
+                value=10,
+                key="next_banner_draw_reward_count",
+            )
+        next_banner_draw_repeat = st.checkbox(
+            "可重复触发",
+            value=False,
+            key="next_banner_draw_repeat",
+            help="下期卡池抽奖励是否可以在同一卡池内多次触发",
+        )
+
+        if st.button("创建模板", key="create_template_btn"):
+            # Validate probabilities sum to 1
+            total_prob = prob_r4 + prob_r5 + prob_r6
+            if abs(total_prob - 1.0) > 0.001:
+                st.error(f"概率之和必须为1，当前为{total_prob:.3f}")
+            else:
+                new_template = BannerTemplate(
+                    name=new_template_name,
+                    rarities=[4, 5, 6],
+                    default_distribution=[
+                        RarityProbability(rarity=4, probability=prob_r4),
+                        RarityProbability(rarity=5, probability=prob_r5),
+                        RarityProbability(rarity=6, probability=prob_r6),
+                    ],
+                    main_probability=main_prob,
+                    has_pity_draw=has_pity,
+                    pity_draw_start=pity_start,
+                    pity_draw_limit=pity_limit,
+                    pity_rarity_boost_per_draw=pity_boost,
+                    pity_draw_inherit_policy=pity_inherit_policy,
+                    pity_draw_repeat_policy=pity_repeat_policy,
+                    pity_reset_condition=pity_reset_condition,
+                    has_definitive_draw=has_definitive,
+                    definitive_draw_count=definitive_count,
+                    definitive_draw_inherit_policy=definitive_inherit_policy,
+                    definitive_reset_condition=definitive_reset_condition,
+                    has_potential_reward=has_potential,
+                    potential_reward_draw=potential_draw,
+                    special_draw_reward_at=special_draw_reward_at,
+                    special_draw_reward_count=special_draw_reward_count,
+                    special_draw_repeat=special_draw_repeat,
+                    next_banner_draw_reward_at=next_banner_draw_reward_at,
+                    next_banner_draw_reward_count=next_banner_draw_reward_count,
+                    next_banner_draw_repeat=next_banner_draw_repeat,
+                )
+                st.session_state.banner_templates.append(new_template)
+                update_url()
+                st.rerun()
 
 # Rarity colors
 RARITY_COLORS = {6: "red", 5: "orange", 4: "purple"}
@@ -1092,9 +1410,15 @@ if st.session_state.run_results:
             if operators_with_buckets:
                 st.markdown("**首抽分布(氪金)**")
                 # Find the max bucket across all operators for consistent x-axis
+                # Exclude -1 (special draw bucket) from min/max calculation
                 all_buckets = set()
+                has_special_bucket = False
                 for _, op in operators_with_buckets:
-                    all_buckets.update(op.draw_buckets.keys())
+                    for bucket in op.draw_buckets.keys():
+                        if bucket == -1:
+                            has_special_bucket = True
+                        else:
+                            all_buckets.add(bucket)
                 min_bucket = min(all_buckets) if all_buckets else 0
                 max_bucket = max(all_buckets) if all_buckets else 120
 
@@ -1109,10 +1433,19 @@ if st.session_state.run_results:
                                 # Build histogram data with consistent buckets
                                 bucket_labels = []
                                 bucket_values = []
+                                # Add special bucket first if any operator has it
+                                if has_special_bucket:
+                                    bucket_labels.append("sp")
+                                    count = op.draw_buckets.get(-1, 0)
+                                    pct = (
+                                        (count / op.first_draw_count * 100)
+                                        if op.first_draw_count > 0
+                                        else 0
+                                    )
+                                    bucket_values.append(pct)
+                                # Add normal buckets
                                 for bucket in range(min_bucket, max_bucket + 10, 10):
-                                    bucket_labels.append(
-                                        bucket
-                                    )  # Keep as int for proper sorting
+                                    bucket_labels.append(str(bucket))
                                     count = op.draw_buckets.get(bucket, 0)
                                     pct = (
                                         (count / op.first_draw_count * 100)
