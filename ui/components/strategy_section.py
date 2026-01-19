@@ -63,7 +63,7 @@ def render_strategy_section():
     )
 
     # Strategy settings inside an expandable container
-    with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
+    with st.expander(f"策略配置: {current_strategy.name}", expanded=False):
         if is_default_strategy:
             # Show read-only view for default strategy
             st.info(
@@ -891,7 +891,7 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
 
 def _render_strategy_creation():
     """Render the strategy creation and deletion section."""
-    col_create, col_delete, col_desc = st.columns(3)
+    col_create, col_delete, col_apply, col_desc = st.columns(4)
     with col_create:
         with st.popover("创建新策略", use_container_width=True):
             _render_strategy_creation_dialog()
@@ -910,6 +910,29 @@ def _render_strategy_creation():
                 )
                 update_url()
                 st.rerun()
+
+    with col_apply:
+        # Apply current strategy to all banners button
+        if st.button(
+            "应用到所有卡池", help="将当前策略应用到所有卡池（包括自动添加的卡池）"
+        ):
+            current_strategy = _get_current_strategy()
+            # Apply to all existing banners
+            for banner in st.session_state.banners:
+                st.session_state.run_banner_strategies[banner.name] = (
+                    current_strategy.name
+                )
+                # Also update the widget key so the UI reflects the change
+                config_key = f"run_config_{banner.name}"
+                st.session_state[config_key] = current_strategy.name
+            # Apply to auto banner strategy
+            strategy_names = [s.name for s in st.session_state.strategies]
+            if current_strategy.name in strategy_names:
+                st.session_state.auto_banner_strategy_idx = strategy_names.index(
+                    current_strategy.name
+                )
+            update_url()
+            st.rerun()
 
     with col_desc:
         # Show strategy description button

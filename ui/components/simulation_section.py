@@ -34,6 +34,11 @@ def _on_auto_banner_config_change():
     update_url()
 
 
+def _on_num_experiments_change():
+    """Callback when number of experiments changes."""
+    update_url()
+
+
 def _on_config_change():
     """Callback when config values change."""
     st.session_state.config.initial_draws = st.session_state.config_initial_draws
@@ -99,9 +104,10 @@ def render_simulation_section():
         "模拟次数",
         min_value=1,
         max_value=100000,
-        value=1000,
+        value=st.session_state.get("num_experiments", 1000),
         step=100,
         key="num_experiments",
+        on_change=_on_num_experiments_change,
         help="运行模拟的次数，次数越多结果越准确",
     )
 
@@ -189,62 +195,61 @@ def _render_auto_banner_config() -> dict:
     st.caption("在已有卡池之后自动生成更多卡池继续模拟")
 
     with st.container(border=True):
-        # Initialize session state defaults if not present
-        if "auto_banner_count" not in st.session_state:
-            st.session_state.auto_banner_count = 0
-        if "auto_banner_template_idx" not in st.session_state:
-            st.session_state.auto_banner_template_idx = 0
-        if "auto_banner_strategy_idx" not in st.session_state:
-            st.session_state.auto_banner_strategy_idx = 0
-
+        # Use value parameter to ensure we read from session state
+        current_auto_count = st.session_state.get("auto_banner_count", 0)
         auto_count = st.number_input(
             "自动添加卡池数量",
             min_value=0,
             max_value=1000,
+            value=current_auto_count,
             step=1,
             key="auto_banner_count",
             help="0表示不自动添加卡池",
             on_change=_on_auto_banner_config_change,
         )
 
-        if auto_count > 0:
-            col1, col2 = st.columns(2)
-            with col1:
-                # Template selection
-                template_names = [t.name for t in st.session_state.banner_templates]
-                # Clamp index to valid range
-                if st.session_state.auto_banner_template_idx >= len(template_names):
-                    st.session_state.auto_banner_template_idx = 0
-                auto_template_idx = st.selectbox(
-                    "卡池模板",
-                    range(len(template_names)),
-                    format_func=lambda x: template_names[x],
-                    key="auto_banner_template_idx",
-                    help="自动生成卡池使用的模板",
-                    on_change=_on_auto_banner_config_change,
-                )
-            with col2:
-                # Strategy selection
-                strategy_names = [s.name for s in st.session_state.strategies]
-                # Clamp index to valid range
-                if st.session_state.auto_banner_strategy_idx >= len(strategy_names):
-                    st.session_state.auto_banner_strategy_idx = 0
-                auto_strategy_idx = st.selectbox(
-                    "抽卡策略",
-                    range(len(strategy_names)),
-                    format_func=lambda x: strategy_names[x],
-                    key="auto_banner_strategy_idx",
-                    help="自动生成卡池使用的策略",
-                    on_change=_on_auto_banner_config_change,
-                )
+        # Always show template and strategy selectors
+        col1, col2 = st.columns(2)
+        with col1:
+            # Template selection
+            template_names = [t.name for t in st.session_state.banner_templates]
+            # Clamp index to valid range
+            current_template_idx = st.session_state.get("auto_banner_template_idx", 0)
+            if current_template_idx >= len(template_names):
+                current_template_idx = 0
+                st.session_state.auto_banner_template_idx = 0
+            auto_template_idx = st.selectbox(
+                "卡池模板",
+                range(len(template_names)),
+                index=current_template_idx,
+                format_func=lambda x: template_names[x],
+                key="auto_banner_template_idx",
+                help="自动生成卡池使用的模板",
+                on_change=_on_auto_banner_config_change,
+            )
+        with col2:
+            # Strategy selection
+            strategy_names = [s.name for s in st.session_state.strategies]
+            # Clamp index to valid range
+            current_strategy_idx = st.session_state.get("auto_banner_strategy_idx", 0)
+            if current_strategy_idx >= len(strategy_names):
+                current_strategy_idx = 0
+                st.session_state.auto_banner_strategy_idx = 0
+            auto_strategy_idx = st.selectbox(
+                "抽卡策略",
+                range(len(strategy_names)),
+                index=current_strategy_idx,
+                format_func=lambda x: strategy_names[x],
+                key="auto_banner_strategy_idx",
+                help="自动生成卡池使用的策略",
+                on_change=_on_auto_banner_config_change,
+            )
 
-            return {
-                "count": auto_count,
-                "template_idx": auto_template_idx,
-                "strategy_idx": auto_strategy_idx,
-            }
-
-    return {"count": 0, "template_idx": 0, "strategy_idx": 0}
+        return {
+            "count": auto_count,
+            "template_idx": auto_template_idx,
+            "strategy_idx": auto_strategy_idx,
+        }
 
 
 def _render_run_button(num_experiments: int, auto_config: dict):
@@ -255,10 +260,29 @@ def _render_run_button(num_experiments: int, auto_config: dict):
     if "run_simulation_confirmed" not in st.session_state:
         st.session_state.run_simulation_confirmed = False
 
+    # Calculate total banner count for validation
+    enabled_banner_count = sum(
+        1
+        for banner in st.session_state.banners
+        if st.session_state.run_banner_enabled.get(banner.name, False)
+    )
+    auto_banner_count = auto_config.get("count", 0)
+    total_banner_count = enabled_banner_count + auto_banner_count
+    total_simulations = num_experiments * total_banner_count
+
     # Check if simulation was confirmed and should run
     if st.session_state.run_simulation_confirmed:
         st.session_state.run_simulation_confirmed = False
         _execute_simulation(num_experiments, auto_config)
+        return
+
+    # Validate total simulation count
+    if total_simulations > 100000:
+        st.error(
+            f"模拟总数超过限制：{num_experiments} 次 × {total_banner_count} 卡池 = {total_simulations} > 100000。"
+            f"请减少模拟次数或卡池数量。"
+        )
+        st.button("运行模拟", type="primary", disabled=True)
         return
 
     if st.button("运行模拟", type="primary"):

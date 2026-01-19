@@ -710,21 +710,26 @@ class DrawStrategy(BaseModel):
         if behavior_parts:
             lines.append(f"{prefix}抽卡行为: {', '.join(behavior_parts)}")
 
-        # Rules section
+        # Rules section using 如果/否则如果/否则 format
         if self.rules:
             sorted_rules = sorted(self.rules, key=lambda r: -r.priority)
-            lines.append(f"{prefix}规则:")
-            for i, rule in enumerate(sorted_rules, 1):
-                rule_desc = self._rule_to_chinese(
+            for i, rule in enumerate(sorted_rules):
+                cond_str, action_str = self._rule_to_chinese_parts(
                     rule, strategy_registry, visited, indent + 1
                 )
-                lines.append(f"{prefix}  {i}. {rule_desc}")
+                if i == 0:
+                    lines.append(f"{prefix}如果 {cond_str}，那么 {action_str}")
+                else:
+                    lines.append(f"{prefix}否则如果 {cond_str}，那么 {action_str}")
 
         # Default action
         default_desc = self._action_to_chinese(
             self.default_action, strategy_registry, visited, indent + 1
         )
-        lines.append(f"{prefix}默认行为: {default_desc}")
+        if self.rules:
+            lines.append(f"{prefix}否则，{default_desc}")
+        else:
+            lines.append(f"{prefix}默认行为: {default_desc}")
 
         return "\n".join(lines)
 
@@ -819,14 +824,18 @@ class DrawStrategy(BaseModel):
             return desc
         return str(action)
 
-    def _rule_to_chinese(
+    def _rule_to_chinese_parts(
         self,
         rule: "StrategyRule",
         strategy_registry: Optional[dict[str, "DrawStrategy"]],
         visited: set[str],
         indent: int,
-    ) -> str:
-        """Convert a rule to Chinese text."""
+    ) -> tuple[str, str]:
+        """Convert a rule to Chinese text parts (condition, action).
+
+        Returns:
+            Tuple of (conditions_str, action_str)
+        """
         # Conditions
         if rule.conditions:
             cond_texts = [self._condition_to_chinese(c) for c in rule.conditions]
@@ -839,7 +848,7 @@ class DrawStrategy(BaseModel):
             rule.action, strategy_registry, visited, indent
         )
 
-        return f"[优先级{rule.priority}] 当 {conditions_str} → {action_str}"
+        return conditions_str, action_str
 
 
 # =============================================================================

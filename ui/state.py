@@ -46,6 +46,7 @@ def serialize_state() -> str:
         "current_strategy_idx": st.session_state.current_strategy_idx,
         "run_banner_enabled": st.session_state.get("run_banner_enabled", {}),
         "run_banner_strategies": st.session_state.get("run_banner_strategies", {}),
+        "num_experiments": st.session_state.get("num_experiments", 1000),
         "auto_banner_count": st.session_state.get("auto_banner_count", 0),
         "auto_banner_template_idx": st.session_state.get("auto_banner_template_idx", 0),
         "auto_banner_strategy_idx": st.session_state.get("auto_banner_strategy_idx", 0),
@@ -127,6 +128,8 @@ def initialize_session_state():
                 st.session_state.run_banner_strategies = state.get(
                     "run_banner_strategies", {}
                 )
+                # Load num_experiments
+                st.session_state.num_experiments = state.get("num_experiments", 1000)
                 # Load auto banner config
                 st.session_state.auto_banner_count = state.get("auto_banner_count", 0)
                 st.session_state.auto_banner_template_idx = state.get(
@@ -168,6 +171,7 @@ def _initialize_defaults():
     st.session_state.current_strategy_idx = 0
     st.session_state.run_banner_enabled = {}
     st.session_state.run_banner_strategies = {}
+    st.session_state.num_experiments = 1000
     st.session_state.auto_banner_count = 0
     st.session_state.auto_banner_template_idx = 0
     st.session_state.auto_banner_strategy_idx = 0
