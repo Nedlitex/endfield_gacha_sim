@@ -27,7 +27,7 @@ def render_template_management():
                 # Show key parameters
                 if template.has_pity_draw:
                     st.caption(
-                        f"小保底: 第{template.pity_draw_start + 1}抽开始提升, 第{template.pity_draw_limit}抽必出"
+                        f"小保底: 第{template.pity_draw_start}抽开始提升, 第{template.pity_draw_limit}抽必出"
                     )
                 if template.has_definitive_draw:
                     st.caption(f"大保底: 第{template.definitive_draw_count}抽必得UP")

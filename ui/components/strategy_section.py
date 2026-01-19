@@ -292,18 +292,97 @@ def _render_strategy_summary(current_strategy: DrawStrategy):
 
 def _render_strategy_creation():
     """Render the strategy creation and deletion section."""
-    new_strategy_name = st.text_input(
-        "新策略名称", value="", key="new_strategy_name", placeholder="输入新策略名称"
-    )
     col_create, col_delete = st.columns(2)
     with col_create:
-        if st.button("创建策略"):
-            if new_strategy_name:
-                st.session_state.strategies.append(DrawStrategy(name=new_strategy_name))
-                new_idx = len(st.session_state.strategies) - 1
-                st.session_state.current_strategy_idx = new_idx
-                update_url()
-                st.rerun()
+        with st.popover("创建新策略", use_container_width=True):
+            st.subheader("创建抽卡策略")
+
+            new_strategy_name = st.text_input(
+                "策略名称",
+                value="自定义策略",
+                key="new_strategy_name",
+            )
+
+            st.markdown("**抽数限制**")
+            col1, col2 = st.columns(2)
+            with col1:
+                new_min_draws = st.number_input(
+                    "每池最少抽数",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    key="new_strategy_min_draws",
+                )
+            with col2:
+                new_max_draws = st.number_input(
+                    "每池最多抽数",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    key="new_strategy_max_draws",
+                    help="0表示无限制",
+                )
+
+            st.markdown("**抽卡行为**")
+            col3, col4 = st.columns(2)
+            with col3:
+                new_skip_threshold = st.number_input(
+                    "跳池阈值",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    key="new_strategy_skip_threshold",
+                    help="剩余抽数低于此值时跳过当前卡池",
+                )
+            with col4:
+                new_single_after = st.number_input(
+                    "累计抽数后单抽",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    key="new_strategy_single_after",
+                    help="累计抽数达到此值后开始单抽",
+                )
+
+            col5, col6, col7 = st.columns(3)
+            with col5:
+                new_stop_on_main = st.checkbox(
+                    "抽到UP后停止",
+                    value=True,
+                    key="new_strategy_stop_on_main",
+                )
+            with col6:
+                new_always_single = st.checkbox(
+                    "始终单抽",
+                    value=False,
+                    key="new_strategy_always_single",
+                )
+            with col7:
+                new_pay = st.checkbox(
+                    "氪金",
+                    value=False,
+                    key="new_strategy_pay",
+                    help="抽数不足时额外获得抽数",
+                )
+
+            if st.button("创建策略", key="create_strategy_btn"):
+                if new_strategy_name:
+                    new_strategy = DrawStrategy(
+                        name=new_strategy_name,
+                        min_draws_per_banner=new_min_draws,
+                        max_draws_per_banner=new_max_draws,
+                        skip_banner_threshold=new_skip_threshold,
+                        single_draw_after=new_single_after,
+                        stop_on_main=new_stop_on_main,
+                        always_single_draw=new_always_single,
+                        pay=new_pay,
+                    )
+                    st.session_state.strategies.append(new_strategy)
+                    new_idx = len(st.session_state.strategies) - 1
+                    st.session_state.current_strategy_idx = new_idx
+                    update_url()
+                    st.rerun()
+
     with col_delete:
         # Delete strategy button (only if more than one strategy exists and not default)
         if (

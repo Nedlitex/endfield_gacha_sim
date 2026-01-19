@@ -217,90 +217,132 @@ class BannerTemplate(BaseModel):
         return descriptions.get(policy, str(policy))
 
     def get_description(self) -> str:
-        """Generate a human-readable description of the banner policy in Chinese."""
+        """Generate a human-readable markdown description of the banner policy in Chinese."""
         lines = []
-        lines.append(f"【{self.name}】")
+        lines.append(f"## {self.name}")
         lines.append("")
 
         # Rarity distribution
-        lines.append("=== 基础概率分布 ===")
+        lines.append("### 基础概率分布")
         lines.append(
-            f"稀有度等级: {', '.join(str(r) + '星' for r in sorted(self.rarities))}"
+            f"**稀有度等级:** {', '.join(str(r) + '星' for r in sorted(self.rarities))}"
         )
+        lines.append("")
+        lines.append("| 稀有度 | 概率 |")
+        lines.append("|--------|------|")
         for rp in sorted(self.default_distribution, key=lambda x: x.rarity):
-            lines.append(f"  {rp.rarity}星概率: {rp.probability * 100:.2f}%")
+            lines.append(f"| {rp.rarity}星 | {rp.probability * 100:.2f}% |")
         lines.append("")
 
         # Main operator
-        lines.append("=== UP干员机制 ===")
+        lines.append("### UP干员机制")
         lines.append(
-            f"UP干员概率: 抽到对应稀有度时，{self.main_probability * 100:.0f}%为UP干员"
+            f"- **UP干员概率:** 抽到对应稀有度时，{self.main_probability * 100:.0f}%为UP干员"
         )
         if self.inherit_main_from_previous_banners > 0:
             lines.append(
-                f"历史UP继承: 继承前{self.inherit_main_from_previous_banners}期UP干员进入卡池"
+                f"- **历史UP继承:** 继承前{self.inherit_main_from_previous_banners}期UP干员进入卡池"
             )
         else:
-            lines.append("历史UP继承: 不继承历史UP干员")
+            lines.append("- **历史UP继承:** 不继承历史UP干员")
         lines.append("")
 
         # Pity system (小保底)
         highest_rarity = max(self.rarities)
-        lines.append("=== 小保底机制 ===")
+        lines.append("### 小保底机制")
         if self.has_pity_draw:
             lines.append(
-                f"概率提升起始: 第{self.pity_draw_start + 1}抽开始提升{highest_rarity}星概率"
-            )
-            lines.append(f"每抽提升幅度: +{self.pity_rarity_boost_per_draw * 100:.0f}%")
-            lines.append(f"小保底: 第{self.pity_draw_limit}抽必出{highest_rarity}星")
-            lines.append(
-                f"小保底计数继承: {self._get_inherit_policy_description(self.pity_draw_inherit_policy)}"
+                f"- **概率提升起始:** 第{self.pity_draw_start}抽开始提升{highest_rarity}星概率"
             )
             lines.append(
-                f"小保底重复触发: {self._get_repeat_policy_description(self.pity_draw_repeat_policy)}"
+                f"- **每抽提升幅度:** +{self.pity_rarity_boost_per_draw * 100:.0f}%"
+            )
+            lines.append(
+                f"- **小保底:** 第{self.pity_draw_limit}抽必出{highest_rarity}星"
+            )
+            lines.append(
+                f"- **计数继承:** {self._get_inherit_policy_description(self.pity_draw_inherit_policy)}"
+            )
+            lines.append(
+                f"- **重复触发:** {self._get_repeat_policy_description(self.pity_draw_repeat_policy)}"
             )
             if self.pity_reset_condition == ResetCondition.ON_HIGHEST_RARITY:
-                lines.append(f"抽到{highest_rarity}星时: 视为触发小保底")
+                lines.append(f"- **重置条件:** 抽到{highest_rarity}星时重置计数")
             elif self.pity_reset_condition == ResetCondition.ON_MAIN:
-                lines.append("抽到UP干员时: 视为触发小保底")
+                lines.append("- **重置条件:** 抽到UP干员时重置计数")
             else:
-                lines.append("小保底重置条件: 无")
+                lines.append("- **重置条件:** 无")
         else:
-            lines.append("无小保底机制")
+            lines.append("*无小保底机制*")
         lines.append("")
 
         # Definitive draw (大保底)
-        lines.append("=== 大保底机制 ===")
+        lines.append("### 大保底机制")
         if self.has_definitive_draw:
-            lines.append(f"大保底抽数: 第{self.definitive_draw_count}抽必得UP干员")
             lines.append(
-                f"大保底计数继承: {self._get_inherit_policy_description(self.definitive_draw_inherit_policy)}"
+                f"- **大保底抽数:** 第{self.definitive_draw_count}抽必得UP干员"
             )
             lines.append(
-                f"大保底重复触发: {self._get_repeat_policy_description(self.definitive_draw_repeat_policy)}"
+                f"- **计数继承:** {self._get_inherit_policy_description(self.definitive_draw_inherit_policy)}"
+            )
+            lines.append(
+                f"- **重复触发:** {self._get_repeat_policy_description(self.definitive_draw_repeat_policy)}"
             )
             if self.definitive_reset_condition == ResetCondition.ON_MAIN:
-                lines.append("抽到UP干员时: 视为触发大保底")
+                lines.append("- **重置条件:** 抽到UP干员时重置计数")
             elif self.definitive_reset_condition == ResetCondition.ON_HIGHEST_RARITY:
-                lines.append(f"抽到{highest_rarity}星时: 视为触发大保底")
+                lines.append(f"- **重置条件:** 抽到{highest_rarity}星时重置计数")
             else:
-                lines.append("大保底重置条件: 无")
+                lines.append("- **重置条件:** 无")
         else:
-            lines.append("无大保底机制")
+            lines.append("*无大保底机制*")
         lines.append("")
 
         # Potential reward
-        lines.append("=== 潜能奖励 ===")
+        lines.append("### 潜能奖励")
         if self.has_potential_reward:
-            lines.append(f"奖励间隔: 每{self.potential_reward_draw}抽赠送UP干员潜能×1")
             lines.append(
-                f"奖励计数继承: {self._get_inherit_policy_description(self.potential_reward_inherit_policy)}"
+                f"- **奖励间隔:** 每{self.potential_reward_draw}抽赠送UP干员潜能×1"
             )
             lines.append(
-                f"奖励重复触发: {self._get_repeat_policy_description(self.potential_reward_repeat_policy)}"
+                f"- **计数继承:** {self._get_inherit_policy_description(self.potential_reward_inherit_policy)}"
+            )
+            lines.append(
+                f"- **重复触发:** {self._get_repeat_policy_description(self.potential_reward_repeat_policy)}"
             )
         else:
-            lines.append("无潜能奖励")
+            lines.append("*无潜能奖励*")
+        lines.append("")
+
+        # Special draw reward
+        lines.append("### 特殊抽奖励")
+        if self.special_draw_reward_at > 0 and self.special_draw_reward_count > 0:
+            lines.append(f"- **触发条件:** 累计抽数达到{self.special_draw_reward_at}抽")
+            lines.append(f"- **奖励数量:** {self.special_draw_reward_count}次特殊抽")
+            lines.append(
+                f"- **重复触发:** {'可重复触发' if self.special_draw_repeat else '不可重复触发'}"
+            )
+        else:
+            lines.append("*无特殊抽奖励*")
+        lines.append("")
+
+        # Next banner draw reward
+        lines.append("### 下期卡池抽奖励")
+        if (
+            self.next_banner_draw_reward_at > 0
+            and self.next_banner_draw_reward_count > 0
+        ):
+            lines.append(
+                f"- **触发条件:** 累计抽数达到{self.next_banner_draw_reward_at}抽"
+            )
+            lines.append(
+                f"- **奖励数量:** {self.next_banner_draw_reward_count}次下期卡池抽"
+            )
+            lines.append(
+                f"- **重复触发:** {'可重复触发' if self.next_banner_draw_repeat else '不可重复触发'}"
+            )
+        else:
+            lines.append("*无下期卡池抽奖励*")
 
         return "\n".join(lines)
 

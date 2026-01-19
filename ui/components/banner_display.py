@@ -28,6 +28,7 @@ def render_banner_display():
         for idx, banner in enumerate(st.session_state.banners):
             with cols[idx % 3]:
                 with st.expander(banner.name, expanded=banner.expanded):
+                    # Display operators by rarity
                     for rarity in [6, 5, 4]:
                         if rarity in banner.operators and banner.operators[rarity]:
                             color = RARITY_COLORS[rarity]
@@ -47,5 +48,44 @@ def render_banner_display():
                             )
                     if not any(banner.operators.get(r) for r in [4, 5, 6]):
                         st.write("*暂无干员*")
+
+                    st.divider()
+
+                    # Template info with popover for details and change
+                    _render_template_section(banner, idx)
     else:
         st.info("暂无卡池，请在侧边栏创建卡池。")
+
+
+def _render_template_section(banner, banner_idx: int):
+    """Render the template section for a banner with details and change option."""
+    template = banner.template
+
+    with st.popover(f"📋 {template.name}", use_container_width=True):
+        # Show template description as markdown
+        st.markdown(template.get_description())
+
+        st.divider()
+
+        # Change template option
+        st.markdown("**更换模板**")
+        template_names = [t.name for t in st.session_state.banner_templates]
+        current_template_idx = 0
+        for i, t in enumerate(st.session_state.banner_templates):
+            if t.name == template.name:
+                current_template_idx = i
+                break
+
+        new_template_idx = st.selectbox(
+            "选择新模板",
+            range(len(template_names)),
+            index=current_template_idx,
+            format_func=lambda x: template_names[x],
+            key=f"banner_{banner_idx}_change_template",
+        )
+
+        if st.button("应用模板", key=f"banner_{banner_idx}_apply_template"):
+            new_template = st.session_state.banner_templates[new_template_idx]
+            banner.template = new_template.model_copy(deep=True)
+            update_url()
+            st.rerun()

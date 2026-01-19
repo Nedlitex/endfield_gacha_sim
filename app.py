@@ -1,4 +1,4 @@
-"""Gacha draw strategy simulator for Endfield."""
+"""Gacha draw strategy simulator for EndField."""
 
 import streamlit as st
 
