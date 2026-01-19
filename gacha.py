@@ -90,6 +90,14 @@ class DrawStrategy(BaseModel):
         default=0,
         description="Minimum draws to each banner, skip_banner_threshold wins over this",
     )
+    max_draws_per_banner: int = Field(
+        default=0,
+        description="Maximum draws per banner (0 means no limit)",
+    )
+    stop_on_main: bool = Field(
+        default=False,
+        description="Stop drawing immediately after getting the main operator",
+    )
     pay: bool = Field(
         default=False,
         description="Pay when the rules cannot be satisfied (i.e. gain extra draws to fulfill the rules above)",
@@ -486,6 +494,17 @@ class Run(BaseModel):
             return 0
 
         draws_accumulated = banner.draws_accumulated
+
+        # Check max_draws_per_banner - if we've reached the max, stop drawing
+        if (
+            strategy.max_draws_per_banner > 0
+            and draws_accumulated >= strategy.max_draws_per_banner
+        ):
+            return 0
+
+        # Check stop_on_main - if we got main and this flag is set, stop immediately
+        if strategy.stop_on_main and got_main:
+            return 0
 
         # Check skip_banner_threshold - if available draws < threshold, skip this banner
         # But only if we can't pay or haven't met min_draws_per_banner yet

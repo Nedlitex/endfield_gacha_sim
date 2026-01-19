@@ -506,11 +506,24 @@ def get_current_strategy():
 
 def on_strategy_change():
     strategy = get_current_strategy()
-    strategy.always_single_draw = st.session_state.strategy_always_single_draw
-    strategy.single_draw_after = st.session_state.strategy_single_draw_after
-    strategy.skip_banner_threshold = st.session_state.strategy_skip_banner_threshold
-    strategy.min_draws_per_banner = st.session_state.strategy_min_draws_per_banner
-    strategy.pay = st.session_state.strategy_pay
+    strategy_key_prefix = f"strategy_{st.session_state.current_strategy_idx}_"
+    strategy.always_single_draw = st.session_state[
+        f"{strategy_key_prefix}always_single_draw"
+    ]
+    strategy.single_draw_after = st.session_state[
+        f"{strategy_key_prefix}single_draw_after"
+    ]
+    strategy.skip_banner_threshold = st.session_state[
+        f"{strategy_key_prefix}skip_banner_threshold"
+    ]
+    strategy.min_draws_per_banner = st.session_state[
+        f"{strategy_key_prefix}min_draws_per_banner"
+    ]
+    strategy.max_draws_per_banner = st.session_state[
+        f"{strategy_key_prefix}max_draws_per_banner"
+    ]
+    strategy.stop_on_main = st.session_state[f"{strategy_key_prefix}stop_on_main"]
+    strategy.pay = st.session_state[f"{strategy_key_prefix}pay"]
     update_url()
 
 
@@ -575,6 +588,10 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
         st.markdown(f"**策略说明:** 氪金抽到UP（抽数不足时额外获得抽数以满足规则）")
     else:
         # Editable view for custom strategies
+        # Use strategy index in keys to avoid cross-strategy contamination
+        strategy_key_prefix = f"strategy_{st.session_state.current_strategy_idx}_"
+
+        # Number inputs row 1
         col3, col4 = st.columns(2)
         with col3:
             st.number_input(
@@ -582,27 +599,31 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
                 min_value=0,
                 value=current_strategy.min_draws_per_banner,
                 step=1,
-                key="strategy_min_draws_per_banner",
+                key=f"{strategy_key_prefix}min_draws_per_banner",
                 on_change=on_strategy_change,
             )
         with col4:
+            st.number_input(
+                "每池最多抽数",
+                min_value=0,
+                value=current_strategy.max_draws_per_banner,
+                step=1,
+                key=f"{strategy_key_prefix}max_draws_per_banner",
+                on_change=on_strategy_change,
+                help="每个卡池最多抽取的次数(0表示无限制)",
+            )
+
+        # Number inputs row 2
+        col5, col6 = st.columns(2)
+        with col5:
             st.number_input(
                 "跳池阈值",
                 min_value=0,
                 value=current_strategy.skip_banner_threshold,
                 step=1,
-                key="strategy_skip_banner_threshold",
+                key=f"{strategy_key_prefix}skip_banner_threshold",
                 on_change=on_strategy_change,
                 help="剩余抽数低于此值时跳过当前卡池",
-            )
-
-        col5, col6 = st.columns(2)
-        with col5:
-            st.checkbox(
-                "始终单抽(特殊10连除外)",
-                value=current_strategy.always_single_draw,
-                key="strategy_always_single_draw",
-                on_change=on_strategy_change,
             )
         with col6:
             st.number_input(
@@ -610,17 +631,37 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
                 min_value=0,
                 value=current_strategy.single_draw_after,
                 step=1,
-                key="strategy_single_draw_after",
+                key=f"{strategy_key_prefix}single_draw_after",
                 on_change=on_strategy_change,
                 help="累计抽数达到此值后开始单抽(特殊10连除外)",
             )
 
-        st.checkbox(
-            "氪金(抽数不足时额外获得抽数以满足规则)",
-            value=current_strategy.pay,
-            key="strategy_pay",
-            on_change=on_strategy_change,
-        )
+        # Checkboxes row
+        col7, col8, col9 = st.columns(3)
+        with col7:
+            st.checkbox(
+                "抽到UP后停止",
+                value=current_strategy.stop_on_main,
+                key=f"{strategy_key_prefix}stop_on_main",
+                on_change=on_strategy_change,
+                help="获得UP干员后立即停止抽取当前卡池",
+            )
+        with col8:
+            st.checkbox(
+                "始终单抽",
+                value=current_strategy.always_single_draw,
+                key=f"{strategy_key_prefix}always_single_draw",
+                on_change=on_strategy_change,
+                help="始终单抽(特殊10连除外)",
+            )
+        with col9:
+            st.checkbox(
+                "氪金",
+                value=current_strategy.pay,
+                key=f"{strategy_key_prefix}pay",
+                on_change=on_strategy_change,
+                help="抽数不足时额外获得抽数以满足规则",
+            )
 
         # min_draws_after_main: list of (threshold, target) tuples
         st.subheader("获得UP后规则")
@@ -704,6 +745,14 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
                 paragraphs.append(
                     f"每个卡池至少抽{current_strategy.min_draws_per_banner}抽。"
                 )
+
+            if current_strategy.max_draws_per_banner > 0:
+                paragraphs.append(
+                    f"每个卡池最多抽{current_strategy.max_draws_per_banner}抽。"
+                )
+
+            if current_strategy.stop_on_main:
+                paragraphs.append("获得UP干员后立即停止抽取当前卡池。")
 
             if current_strategy.skip_banner_threshold > 0:
                 paragraphs.append(
