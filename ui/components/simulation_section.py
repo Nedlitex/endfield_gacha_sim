@@ -34,6 +34,54 @@ def _on_auto_banner_config_change():
     update_url()
 
 
+def _on_config_change():
+    """Callback when config values change."""
+    st.session_state.config.initial_draws = st.session_state.config_initial_draws
+    st.session_state.config.draws_gain_per_banner = (
+        st.session_state.config_draws_per_banner
+    )
+    st.session_state.config.draws_gain_this_banner = (
+        st.session_state.config_draws_this_banner
+    )
+    update_url()
+
+
+def _render_resource_config():
+    """Render the resource configuration section."""
+    st.subheader("资源配置")
+    with st.container(border=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input(
+                "初始抽数",
+                min_value=0,
+                value=st.session_state.config.initial_draws,
+                step=1,
+                key="config_initial_draws",
+                on_change=_on_config_change,
+            )
+        with col2:
+            st.number_input(
+                "每期卡池获得抽数",
+                min_value=0,
+                value=st.session_state.config.draws_gain_per_banner,
+                step=1,
+                key="config_draws_per_banner",
+                on_change=_on_config_change,
+                help="每期卡池获得的抽数，可以结转到下一期",
+            )
+        with col3:
+            st.number_input(
+                "每期限定抽数",
+                min_value=0,
+                value=st.session_state.config.draws_gain_this_banner,
+                step=1,
+                key="config_draws_this_banner",
+                on_change=_on_config_change,
+                help="每期卡池获得的限定抽数，仅限当期使用，不结转",
+            )
+
+
 def render_simulation_section():
     """Render the simulation controls and results."""
     st.header("运行模拟")
@@ -62,6 +110,9 @@ def render_simulation_section():
 
     # Auto banner configuration
     auto_config = _render_auto_banner_config()
+
+    # Resource configuration (right before run button)
+    _render_resource_config()
 
     # Run button
     if st.session_state.banners:
@@ -229,6 +280,18 @@ def _render_run_confirmation_dialog(num_experiments: int, auto_config: dict):
 
         # Number of experiments
         st.markdown(f"**模拟次数:** {num_experiments}")
+
+        # Resource configuration
+        st.markdown("---")
+        st.markdown("### 资源配置")
+        config = st.session_state.config
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("初始抽数", config.initial_draws)
+        with col2:
+            st.metric("每期获得抽数", config.draws_gain_per_banner)
+        with col3:
+            st.metric("每期限定抽数", config.draws_gain_this_banner)
 
         # Build list of enabled banners and their strategies
         enabled_banners = []

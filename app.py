@@ -5,7 +5,6 @@ import streamlit as st
 st.set_page_config(page_title="终末地抽卡策略模拟器", layout="wide")
 
 from ui.components.banner_display import render_banner_display
-from ui.components.config_section import render_config_section
 from ui.components.header import render_header
 from ui.components.sidebar import (
     render_banner_creation,
@@ -38,6 +37,5 @@ with st.sidebar:
 
 # Main content
 render_banner_display()
-render_config_section()
 render_strategy_section()
 render_simulation_section()

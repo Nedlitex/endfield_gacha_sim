@@ -204,9 +204,7 @@ def _condition_to_text(cond: StrategyCondition) -> str:
     elif isinstance(cond, BannerIndexCondition):
         if cond.every_n <= 1:
             return "每个池子"
-        if cond.offset == 0:
-            return f"每{cond.every_n}个池子的第1个"
-        return f"每{cond.every_n}个池子的第{cond.offset + 1}个"
+        return f"每{cond.every_n}个池子的第{cond.start_at}个"
     elif isinstance(cond, PityCounterCondition):
         parts = []
         if cond.min_pity is not None:
@@ -402,7 +400,7 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
         help="仅在特定序号的池子生效(从第1个池子开始计数)",
     )
     banner_every_n = 0
-    banner_offset = 0
+    banner_start_at = 1
     if use_banner_index:
         col1, col2 = st.columns(2)
         with col1:
@@ -415,15 +413,15 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 help="0=每个池子, 2=每2个池子中选1个",
             )
         with col2:
-            max_offset = max(0, banner_every_n - 1) if banner_every_n > 1 else 0
-            banner_offset = st.number_input(
-                "偏移量",
-                min_value=0,
-                max_value=max(1, max_offset),
-                value=0,
+            max_start = banner_every_n if banner_every_n > 1 else 1
+            banner_start_at = st.number_input(
+                "从第几个池子开始",
+                min_value=1,
+                max_value=max(1, max_start),
+                value=1,
                 step=1,
-                key=f"{prefix}new_rule_banner_offset",
-                help="0=第1,3,5...个, 1=第2,4,6...个",
+                key=f"{prefix}new_rule_banner_start_at",
+                help="1=第1,3,5...个, 2=第2,4,6...个(每2池时)",
             )
 
     # Pity counter condition
@@ -658,7 +656,7 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 if use_banner_index:
                     conditions.append(
                         BannerIndexCondition(
-                            every_n=banner_every_n, offset=banner_offset
+                            every_n=banner_every_n, start_at=banner_start_at
                         )
                     )
                 if use_pity_counter and (
@@ -1295,7 +1293,7 @@ def _render_creation_rule_editor(prefix: str):
         help="仅在特定序号的池子生效(从第1个池子开始计数)",
     )
     banner_every_n = 0
-    banner_offset = 0
+    banner_start_at = 1
     if use_banner_index:
         col1, col2 = st.columns(2)
         with col1:
@@ -1308,15 +1306,15 @@ def _render_creation_rule_editor(prefix: str):
                 help="0=每个池子, 2=每2个池子中选1个",
             )
         with col2:
-            max_offset = max(0, banner_every_n - 1) if banner_every_n > 1 else 0
-            banner_offset = st.number_input(
-                "偏移量",
-                min_value=0,
-                max_value=max(1, max_offset),
-                value=0,
+            max_start = banner_every_n if banner_every_n > 1 else 1
+            banner_start_at = st.number_input(
+                "从第几个池子开始",
+                min_value=1,
+                max_value=max(1, max_start),
+                value=1,
                 step=1,
-                key=f"{rule_prefix}banner_offset",
-                help="0=第1,3,5...个, 1=第2,4,6...个",
+                key=f"{rule_prefix}banner_start_at",
+                help="1=第1,3,5...个, 2=第2,4,6...个(每2池时)",
             )
 
     # Pity counter condition
@@ -1545,7 +1543,9 @@ def _render_creation_rule_editor(prefix: str):
                 conditions.append(GotPityWithoutMainCondition(value=pity_value))
             if use_banner_index:
                 conditions.append(
-                    BannerIndexCondition(every_n=banner_every_n, offset=banner_offset)
+                    BannerIndexCondition(
+                        every_n=banner_every_n, start_at=banner_start_at
+                    )
                 )
             if use_pity_counter and (
                 pity_counter_min is not None or pity_counter_max is not None

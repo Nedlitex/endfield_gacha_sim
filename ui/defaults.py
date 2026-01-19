@@ -2,9 +2,12 @@
 
 from banner import Banner, EndFieldBannerTemplate, Operator
 from strategy import (
+    BannerIndexCondition,
     ContinueAction,
     DrawBehavior,
+    DrawCountCondition,
     DrawStrategy,
+    GotMainCondition,
     ResourceThresholdCondition,
     StopAction,
     StrategyRule,
@@ -176,6 +179,42 @@ def create_default_strategies() -> list[DrawStrategy]:
             default_action=ContinueAction(stop_on_main=True),
         ),
         *create_decision_tree_strategies(),
+        # 3-banner cycle: draw 60 for first two, draw to UP on third (ensure min 60)
+        # Banner 3: draw until UP, if UP before 60 continue to 60
+        DrawStrategy(
+            name="每3池前2池抽60第3池抽保底(不氪金)",
+            behavior=DrawBehavior(pay=False),
+            rules=[
+                # Banner 1 in every 3: draw exactly 60
+                StrategyRule(
+                    conditions=[BannerIndexCondition(every_n=3, start_at=1)],
+                    action=ContinueAction(
+                        min_draws_per_banner=60, max_draws_per_banner=60
+                    ),
+                    priority=100,
+                ),
+                # Banner 2 in every 3: draw exactly 60
+                StrategyRule(
+                    conditions=[BannerIndexCondition(every_n=3, start_at=2)],
+                    action=ContinueAction(
+                        min_draws_per_banner=60, max_draws_per_banner=60
+                    ),
+                    priority=100,
+                ),
+                # Banner 3: if got UP and draws < 60, continue to 60
+                StrategyRule(
+                    conditions=[
+                        BannerIndexCondition(every_n=3, start_at=3),
+                        GotMainCondition(value=True),
+                        DrawCountCondition(max_draws=59),
+                    ],
+                    action=ContinueAction(max_draws_per_banner=60),
+                    priority=90,
+                ),
+            ],
+            # Banner 3 (default): draw until UP
+            default_action=ContinueAction(stop_on_main=True),
+        ),
     ]
 
 

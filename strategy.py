@@ -205,19 +205,19 @@ class GotPityWithoutMainCondition(BaseModel):
 
 
 class BannerIndexCondition(BaseModel):
-    """Condition based on banner index (every Nth banner with offset).
+    """Condition based on banner index (every Nth banner starting at a specific banner).
 
-    The banner_index in context is 0-based, but we use 1-based counting:
+    The banner_index in context is 0-based, but we use 1-based counting for start_at:
     - Banner 1 has index 0, Banner 2 has index 1, etc.
 
     Examples:
     - every_n=0: matches all banners (no filtering)
     - every_n=1: matches banner 1, 2, 3, ... (same as 0, every banner)
-    - every_n=2, offset=0: matches banner 1, 3, 5, ... (odd banners)
-    - every_n=2, offset=1: matches banner 2, 4, 6, ... (even banners)
-    - every_n=3, offset=0: matches banner 1, 4, 7, ...
-    - every_n=3, offset=1: matches banner 2, 5, 8, ...
-    - every_n=3, offset=2: matches banner 3, 6, 9, ...
+    - every_n=2, start_at=1: matches banner 1, 3, 5, ... (odd banners)
+    - every_n=2, start_at=2: matches banner 2, 4, 6, ... (even banners)
+    - every_n=3, start_at=1: matches banner 1, 4, 7, ...
+    - every_n=3, start_at=2: matches banner 2, 5, 8, ...
+    - every_n=3, start_at=3: matches banner 3, 6, 9, ...
     """
 
     type: Literal["banner_index"] = "banner_index"
@@ -226,21 +226,24 @@ class BannerIndexCondition(BaseModel):
         ge=0,
         description="Apply on every Nth banner (0 = every banner)",
     )
-    offset: int = Field(
-        default=0,
-        ge=0,
-        description="Offset within the cycle (0 = first in cycle, 1 = second, etc.)",
+    start_at: int = Field(
+        default=1,
+        ge=1,
+        description="First banner in the cycle (1-based). E.g., start_at=1 means banner 1, 1+every_n, 1+2*every_n, ...",
     )
 
     def evaluate(self, context: EvaluationContext) -> bool:
         # 0 or 1 means every banner
         if self.every_n <= 1:
             return True
-        # Check if banner index matches the pattern with offset
+        # Convert start_at (1-based) to offset (0-based)
+        # start_at=1 -> offset=0, start_at=2 -> offset=1, etc.
+        offset = (self.start_at - 1) % self.every_n
+        # Check if banner index matches the pattern
         # index % every_n == offset means:
-        #   offset=0: banners 1, every_n+1, 2*every_n+1, ... (indices 0, every_n, 2*every_n)
-        #   offset=1: banners 2, every_n+2, 2*every_n+2, ... (indices 1, every_n+1, 2*every_n+1)
-        return context.banner_index % self.every_n == self.offset
+        #   start_at=1: banners 1, every_n+1, 2*every_n+1, ... (indices 0, every_n, 2*every_n)
+        #   start_at=2: banners 2, every_n+2, 2*every_n+2, ... (indices 1, every_n+1, 2*every_n+1)
+        return context.banner_index % self.every_n == offset
 
 
 class PityCounterCondition(BaseModel):
@@ -755,9 +758,7 @@ class DrawStrategy(BaseModel):
         elif isinstance(cond, BannerIndexCondition):
             if cond.every_n <= 1:
                 return "每个池子"
-            if cond.offset == 0:
-                return f"每{cond.every_n}个池子的第1个"
-            return f"每{cond.every_n}个池子的第{cond.offset + 1}个"
+            return f"每{cond.every_n}个池子的第{cond.start_at}个"
         elif isinstance(cond, PityCounterCondition):
             parts = []
             if cond.min_pity is not None:
