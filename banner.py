@@ -148,6 +148,144 @@ class BannerTemplate(BaseModel):
         distribution_rarities = {rp.rarity for rp in self.default_distribution}
         return distribution_rarities == set(self.rarities)
 
+    def _get_inherit_policy_description(self, policy: InheritPolicy) -> str:
+        """Get Chinese description for inherit policy."""
+        descriptions = {
+            InheritPolicy.NO_INHERIT: "不继承",
+            InheritPolicy.INHERIT_TO_NEXT: "继承至下一期卡池",
+            InheritPolicy.ALWAYS_INHERIT: "永久继承",
+        }
+        return descriptions.get(policy, str(policy))
+
+    def _get_repeat_policy_description(self, policy: RepeatPolicy) -> str:
+        """Get Chinese description for repeat policy."""
+        descriptions = {
+            RepeatPolicy.NO_REPEAT: "不可重复触发",
+            RepeatPolicy.ALWAYS_REPEAT: "可重复触发",
+        }
+        return descriptions.get(policy, str(policy))
+
+    def get_description(self) -> str:
+        """Generate a human-readable description of the banner policy in Chinese."""
+        lines = []
+        lines.append(f"【{self.name}】")
+        lines.append("")
+
+        # Rarity distribution
+        lines.append("=== 基础概率分布 ===")
+        lines.append(
+            f"稀有度等级: {', '.join(str(r) + '星' for r in sorted(self.rarities))}"
+        )
+        for rp in sorted(self.default_distribution, key=lambda x: x.rarity):
+            lines.append(f"  {rp.rarity}星概率: {rp.probability * 100:.2f}%")
+        lines.append("")
+
+        # Main operator
+        lines.append("=== UP干员机制 ===")
+        lines.append(
+            f"UP干员概率: 抽到对应稀有度时，{self.main_probability * 100:.0f}%为UP干员"
+        )
+        if self.inherit_main_from_previous_banners > 0:
+            lines.append(
+                f"历史UP继承: 继承前{self.inherit_main_from_previous_banners}期UP干员进入卡池"
+            )
+        else:
+            lines.append("历史UP继承: 不继承历史UP干员")
+        lines.append("")
+
+        # Pity system (小保底)
+        highest_rarity = max(self.rarities)
+        lines.append("=== 小保底机制 ===")
+        if self.has_pity_draw:
+            lines.append(
+                f"概率提升起始: 第{self.pity_draw_start + 1}抽开始提升{highest_rarity}星概率"
+            )
+            lines.append(f"每抽提升幅度: +{self.pity_rarity_boost_per_draw * 100:.0f}%")
+            lines.append(f"小保底: 第{self.pity_draw_limit}抽必出{highest_rarity}星")
+            lines.append(
+                f"小保底计数继承: {self._get_inherit_policy_description(self.pity_draw_inherit_policy)}"
+            )
+            lines.append(
+                f"小保底重复触发: {self._get_repeat_policy_description(self.pity_draw_repeat_policy)}"
+            )
+            if self.pity_draw_reset_on_highest_rarity:
+                lines.append(f"抽到{highest_rarity}星时: 小保底计数重置")
+            else:
+                lines.append(f"抽到{highest_rarity}星时: 小保底计数不重置")
+        else:
+            lines.append("无小保底机制")
+        lines.append("")
+
+        # Definitive draw (大保底)
+        lines.append("=== 大保底机制 ===")
+        if self.has_definitive_draw:
+            lines.append(f"大保底抽数: 第{self.definitive_draw_count}抽必得UP干员")
+            lines.append(
+                f"大保底计数继承: {self._get_inherit_policy_description(self.definitive_draw_inherit_policy)}"
+            )
+            lines.append(
+                f"大保底重复触发: {self._get_repeat_policy_description(self.definitive_draw_repeat_policy)}"
+            )
+            if self.definitive_draw_reset_on_highest_rarity:
+                lines.append(f"抽到{highest_rarity}星时: 大保底计数重置")
+            else:
+                lines.append(f"抽到{highest_rarity}星时: 大保底计数不重置")
+        else:
+            lines.append("无大保底机制")
+        lines.append("")
+
+        # Potential reward
+        lines.append("=== 潜能奖励 ===")
+        if self.has_potential_reward:
+            lines.append(f"奖励间隔: 每{self.potential_reward_draw}抽赠送UP干员潜能×1")
+            lines.append(
+                f"奖励计数继承: {self._get_inherit_policy_description(self.potential_reward_inherit_policy)}"
+            )
+            lines.append(
+                f"奖励重复触发: {self._get_repeat_policy_description(self.potential_reward_repeat_policy)}"
+            )
+        else:
+            lines.append("无潜能奖励")
+
+        return "\n".join(lines)
+
+
+# Default banner template for EndField (终末地)
+# Based on the current Banner implementation
+EndFieldBannerTemplate = BannerTemplate(
+    name="终末地卡池模板",
+    # Rarity configuration - 4/5/6 star system
+    rarities=[4, 5, 6],
+    default_distribution=[
+        RarityProbability(rarity=4, probability=0.912),
+        RarityProbability(rarity=5, probability=0.08),
+        RarityProbability(rarity=6, probability=0.008),
+    ],
+    # Main operator gets 50% when drawing its rarity
+    main_probability=0.5,
+    # Historical main operator inheritance from previous 2
+    inherit_main_from_previous_banners=2,
+    # Pity system: starts at draw 66, guaranteed at 80, +5% per draw
+    has_pity_draw=True,
+    pity_draw_start=66,
+    pity_draw_limit=80,
+    pity_rarity_boost_per_draw=0.05,
+    pity_draw_inherit_policy=InheritPolicy.ALWAYS_INHERIT,
+    pity_draw_repeat_policy=RepeatPolicy.ALWAYS_REPEAT,
+    pity_draw_reset_on_highest_rarity=True,
+    # Definitive draw: guaranteed main operator at 120 draws
+    has_definitive_draw=True,
+    definitive_draw_count=120,
+    definitive_draw_inherit_policy=InheritPolicy.NO_INHERIT,
+    definitive_draw_repeat_policy=RepeatPolicy.NO_REPEAT,
+    definitive_draw_reset_on_highest_rarity=False,
+    # Potential reward: extra potential every 240 draws
+    has_potential_reward=True,
+    potential_reward_draw=240,
+    potential_reward_inherit_policy=InheritPolicy.NO_INHERIT,
+    potential_reward_repeat_policy=RepeatPolicy.ALWAYS_REPEAT,
+)
+
 
 class Operator(BaseModel):
     rarity: int = Field(6, description="Rarity of the operator")
