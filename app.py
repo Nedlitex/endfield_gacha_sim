@@ -746,7 +746,9 @@ with col_create:
     if st.button("创建策略"):
         if new_strategy_name:
             st.session_state.strategies.append(DrawStrategy(name=new_strategy_name))
-            st.session_state.current_strategy_idx = len(st.session_state.strategies) - 1
+            new_idx = len(st.session_state.strategies) - 1
+            st.session_state.current_strategy_idx = new_idx
+            st.session_state.strategy_selector = new_idx  # Sync selectbox state
             update_url()
             st.rerun()
 with col_delete:
