@@ -665,7 +665,7 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
 
         # min_draws_after_main: list of (threshold, target) tuples
         st.subheader("获得UP后规则")
-        st.caption("当前抽数 < 阈值时，获得UP后继续抽至目标抽数")
+        st.caption("当前抽数 >= 阈值时，获得UP后继续抽至目标抽数")
 
         # Display existing rules
         for idx, (threshold, target) in enumerate(
@@ -673,7 +673,7 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
         ):
             col1, col2 = st.columns([5, 1])
             with col1:
-                st.text(f"获得UP后若当前抽数小于{threshold}则继续抽至{target}")
+                st.text(f"获得UP后若当前抽数>={threshold}则继续抽至{target}")
             with col2:
                 if st.button("删除", key=f"delete_rule_{idx}"):
                     current_strategy.min_draws_after_main.pop(idx)
@@ -700,7 +700,7 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
 
         # min_draws_after_pity: list of (threshold, target) tuples
         st.subheader("小保底歪了后规则")
-        st.caption("当前抽数 < 阈值时，歪了(触发小保底但未获得UP)后继续抽至目标抽数")
+        st.caption("当前抽数 >= 阈值时，歪了(触发小保底但未获得UP)后继续抽至目标抽数")
 
         # Display existing rules
         for idx, (threshold, target) in enumerate(
@@ -708,7 +708,7 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
         ):
             col1, col2 = st.columns([5, 1])
             with col1:
-                st.text(f"歪了后若当前抽数小于{threshold}则继续抽至{target}")
+                st.text(f"歪了后若当前抽数>={threshold}则继续抽至{target}")
             with col2:
                 if st.button("删除", key=f"delete_pity_rule_{idx}"):
                     current_strategy.min_draws_after_pity.pop(idx)
@@ -769,13 +769,13 @@ with st.expander(f"策略配置: {current_strategy.name}", expanded=True):
             if current_strategy.min_draws_after_main:
                 rules_desc = []
                 for threshold, target in current_strategy.min_draws_after_main:
-                    rules_desc.append(f"若当前抽数小于{threshold}则继续抽至{target}抽")
+                    rules_desc.append(f"若当前抽数>={threshold}则继续抽至{target}抽")
                 paragraphs.append(f"获得UP干员后，{'；'.join(rules_desc)}。")
 
             if current_strategy.min_draws_after_pity:
                 rules_desc = []
                 for threshold, target in current_strategy.min_draws_after_pity:
-                    rules_desc.append(f"若当前抽数小于{threshold}则继续抽至{target}抽")
+                    rules_desc.append(f"若当前抽数>={threshold}则继续抽至{target}抽")
                 paragraphs.append(
                     f"歪了(触发小保底但未获得UP)后，{'；'.join(rules_desc)}。"
                 )

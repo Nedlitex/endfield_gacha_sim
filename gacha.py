@@ -517,7 +517,7 @@ class Run(BaseModel):
         if got_main:
             target_draws = draws_accumulated  # default: no additional draws needed
             for threshold, target in strategy.min_draws_after_main:
-                if draws_accumulated < threshold:
+                if draws_accumulated >= threshold:
                     target_draws = max(target_draws, target)
 
             # If we've reached the target, stop drawing
@@ -530,7 +530,7 @@ class Run(BaseModel):
         if got_pity_without_main and not got_main:
             target_draws = draws_accumulated  # default: no additional draws needed
             for threshold, target in strategy.min_draws_after_pity:
-                if draws_accumulated < threshold:
+                if draws_accumulated >= threshold:
                     target_draws = max(target_draws, target)
 
             # If we've reached the target, stop drawing
