@@ -11,6 +11,9 @@ def _on_config_change():
     st.session_state.config.draws_gain_per_banner = (
         st.session_state.config_draws_per_banner
     )
+    st.session_state.config.draws_gain_this_banner = (
+        st.session_state.config_draws_this_banner
+    )
     update_url()
 
 
@@ -21,7 +24,7 @@ def render_config_section():
     # Config settings (initial draws and draws per banner)
     st.subheader("资源配置")
     with st.container(border=True):
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.number_input(
                 "初始抽数",
@@ -39,4 +42,15 @@ def render_config_section():
                 step=1,
                 key="config_draws_per_banner",
                 on_change=_on_config_change,
+                help="每期卡池获得的抽数，可以结转到下一期",
+            )
+        with col3:
+            st.number_input(
+                "每期限定抽数",
+                min_value=0,
+                value=st.session_state.config.draws_gain_this_banner,
+                step=1,
+                key="config_draws_this_banner",
+                on_change=_on_config_change,
+                help="每期卡池获得的限定抽数，仅限当期使用，不结转",
             )

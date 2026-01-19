@@ -238,10 +238,16 @@ def _render_strategy_summary(current_strategy: DrawStrategy):
     if st.button("生成策略说明"):
         paragraphs = []
         paragraphs.append(f"【{current_strategy.name}】")
-        paragraphs.append(
-            f"玩家初始拥有{st.session_state.config.initial_draws}抽，"
-            f"每期卡池额外获得{st.session_state.config.draws_gain_per_banner}抽。"
-        )
+        config = st.session_state.config
+        resource_desc = f"玩家初始拥有{config.initial_draws}抽"
+        if config.draws_gain_per_banner > 0:
+            resource_desc += f"，每期卡池额外获得{config.draws_gain_per_banner}抽"
+        if config.draws_gain_this_banner > 0:
+            resource_desc += (
+                f"，每期卡池额外获得{config.draws_gain_this_banner}限定抽(仅限当期使用)"
+            )
+        resource_desc += "。"
+        paragraphs.append(resource_desc)
 
         if current_strategy.min_draws_per_banner > 0:
             paragraphs.append(

@@ -6,6 +6,123 @@ from pydantic import BaseModel, Field
 from banner import Banner, DrawResult, Operator, RewardType
 
 
+class BannerResource(BaseModel):
+    """Tracks available draw resources for a banner simulation.
+
+    Resources are categorized into three types:
+    - normal_draws: Can be used at any banner, inherits across banners,
+      receives inherited draw rewards and initial draws
+    - current_banner_draws: Can only be used at the current banner,
+      does NOT carry over to next banner, comes from previous banner's
+      next_banner_draw rewards
+    - special_draws: Can only be used at the current banner as special draws,
+      does NOT carry over, comes from special_draw rewards
+
+    The strategy should prioritize using non-carryover resources first
+    (special_draws, then current_banner_draws) before using normal_draws.
+    """
+
+    normal_draws: int = Field(
+        default=0,
+        description="Draws that can be used at any banner and carry over",
+    )
+    current_banner_draws: int = Field(
+        default=0,
+        description="Draws only usable at current banner, don't carry over",
+    )
+    special_draws: int = Field(
+        default=0,
+        description="Special draws only usable at current banner, don't carry over",
+    )
+
+    def total_available(self) -> int:
+        """Get total available draws (all types combined)."""
+        return self.normal_draws + self.current_banner_draws + self.special_draws
+
+    def has_special_draws(self) -> bool:
+        """Check if there are special draws available."""
+        return self.special_draws > 0
+
+    def has_current_banner_draws(self) -> bool:
+        """Check if there are current banner draws available."""
+        return self.current_banner_draws > 0
+
+    def has_normal_draws(self) -> bool:
+        """Check if there are normal draws available."""
+        return self.normal_draws > 0
+
+    def consume_special_draws(self, amount: int) -> int:
+        """Consume special draws up to the available amount.
+
+        Args:
+            amount: Number of special draws to consume.
+
+        Returns:
+            Actual number of special draws consumed.
+        """
+        consumed = min(amount, self.special_draws)
+        self.special_draws -= consumed
+        return consumed
+
+    def consume_current_banner_draws(self, amount: int) -> int:
+        """Consume current banner draws up to the available amount.
+
+        Args:
+            amount: Number of current banner draws to consume.
+
+        Returns:
+            Actual number of current banner draws consumed.
+        """
+        consumed = min(amount, self.current_banner_draws)
+        self.current_banner_draws -= consumed
+        return consumed
+
+    def consume_normal_draws(self, amount: int) -> int:
+        """Consume normal draws up to the available amount.
+
+        Args:
+            amount: Number of normal draws to consume.
+
+        Returns:
+            Actual number of normal draws consumed.
+        """
+        consumed = min(amount, self.normal_draws)
+        self.normal_draws -= consumed
+        return consumed
+
+    def add_normal_draws(self, amount: int) -> None:
+        """Add normal draws (from config gains, inherited rewards, etc.)."""
+        self.normal_draws += amount
+
+    def add_current_banner_draws(self, amount: int) -> None:
+        """Add current banner draws (from previous banner's next_banner rewards)."""
+        self.current_banner_draws += amount
+
+    def add_special_draws(self, amount: int) -> None:
+        """Add special draws (from special_draw rewards)."""
+        self.special_draws += amount
+
+    def prepare_for_next_banner(self, next_banner_reward: int) -> "BannerResource":
+        """Create a new BannerResource for the next banner.
+
+        - normal_draws carry over as-is
+        - current_banner_draws are reset (don't carry over)
+        - special_draws are reset (don't carry over)
+        - next_banner_reward becomes the new current_banner_draws
+
+        Args:
+            next_banner_reward: Draws rewarded for the next banner.
+
+        Returns:
+            New BannerResource for the next banner.
+        """
+        return BannerResource(
+            normal_draws=self.normal_draws,
+            current_banner_draws=next_banner_reward,
+            special_draws=0,
+        )
+
+
 class DrawStrategy(BaseModel):
     """Configuration for automated drawing strategy on banners.
 
@@ -194,7 +311,12 @@ class Config(BaseModel):
         default=0, description="Number of draws player get initially"
     )
     draws_gain_per_banner: int = Field(
-        default=0, description="Number of draws player get per each banner"
+        default=0,
+        description="Number of draws player get per each banner (carries over)",
+    )
+    draws_gain_this_banner: int = Field(
+        default=0,
+        description="Number of draws gained per banner that can only be used on that banner (does not carry over)",
     )
 
 
@@ -242,80 +364,99 @@ class Run(BaseModel):
             return self.banner_strategies[banner.name]
         return None
 
-    def _get_next_draw_amount(
+    def _should_continue_drawing(
         self,
-        current_available: int,
+        resource: BannerResource,
         banner: Banner,
         got_main: bool,
         got_pity_without_main: bool = False,
-    ) -> int:
-        """Determine the next draw amount based on the banner's strategy rules.
-
-        Evaluates all strategy rules to decide whether to continue drawing and
-        how many draws to perform (1 or 10).
+    ) -> bool:
+        """Determine if we should continue drawing based on strategy rules.
 
         Args:
-            current_available: Number of draws currently available to the player.
+            resource: The current banner resource state.
             banner: The banner being drawn on.
             got_main: Whether the main operator has been obtained.
             got_pity_without_main: Whether pity was triggered without getting main.
 
         Returns:
-            Number of draws to perform (1, 10, or 0 to stop drawing).
+            True if we should continue drawing, False to stop.
         """
         strategy = self._get_draw_strategy_for_banner(banner)
         if not strategy:
-            return 0
+            return False
 
         draws_accumulated = banner.draws_accumulated
+        # For threshold checks, only count normal_draws (carryover resources)
+        # current_banner_draws and special_draws don't count for skip threshold
+        normal_available = resource.normal_draws
 
         # Check max_draws_per_banner - if we've reached the max, stop drawing
         if (
             strategy.max_draws_per_banner > 0
             and draws_accumulated >= strategy.max_draws_per_banner
         ):
-            return 0
+            return False
 
         # Check stop_on_main - if we got main and this flag is set, stop immediately
         if strategy.stop_on_main and got_main:
-            return 0
+            return False
 
-        # Check skip_banner_threshold - if available draws < threshold, skip this banner
-        # But only if we can't pay or haven't met min_draws_per_banner yet
-        if not strategy.pay and current_available < strategy.skip_banner_threshold:
-            # Check if we've met minimum draws requirement
+        # Check skip_banner_threshold - only considers normal_draws (carryover)
+        # If normal draws < threshold and can't pay, skip this banner
+        # But only if we've met min_draws_per_banner
+        if not strategy.pay and normal_available < strategy.skip_banner_threshold:
             if draws_accumulated >= strategy.min_draws_per_banner:
-                return 0
+                return False
 
         # If we got the main operator, check min_draws_after_main rules
         if got_main:
-            # Default: continue to min_draws_per_banner
             target_draws = strategy.min_draws_per_banner
             for threshold, target in strategy.min_draws_after_main:
                 if draws_accumulated >= threshold:
                     target_draws = max(target_draws, target)
 
-            # If we've reached the target, stop drawing
             if draws_accumulated >= target_draws:
-                return 0
+                return False
 
         # If we hit pity but missed the main operator, check min_draws_after_pity rules
         if got_pity_without_main and not got_main:
-            # Default: continue to min_draws_per_banner
             target_draws = strategy.min_draws_per_banner
             for threshold, target in strategy.min_draws_after_pity:
                 if draws_accumulated >= threshold:
                     target_draws = max(target_draws, target)
 
-            # If we've reached the target, stop drawing
             if draws_accumulated >= target_draws:
-                return 0
+                return False
 
-        # Check if we have draws available (or can pay)
-        if current_available <= 0 and not strategy.pay:
-            return 0
+        # Check if we have any draws available (or can pay)
+        total_available = resource.total_available()
+        if total_available <= 0 and not strategy.pay:
+            return False
 
-        # Determine draw amount (1 or 10)
+        return True
+
+    def _get_draw_amount(
+        self,
+        resource: BannerResource,
+        banner: Banner,
+    ) -> int:
+        """Determine how many draws to perform (1 or 10).
+
+        Args:
+            resource: The current banner resource state.
+            banner: The banner being drawn on.
+
+        Returns:
+            Number of draws to perform (1 or 10).
+        """
+        strategy = self._get_draw_strategy_for_banner(banner)
+        if not strategy:
+            return 1
+
+        draws_accumulated = banner.draws_accumulated
+        total_available = resource.total_available()
+
         if strategy.always_single_draw:
             return 1
         elif (
@@ -323,7 +464,7 @@ class Run(BaseModel):
             and draws_accumulated >= strategy.single_draw_after
         ):
             return 1
-        elif current_available >= 10 or strategy.pay:
+        elif total_available >= 10 or strategy.pay:
             return 10
         else:
             return 1
@@ -339,11 +480,15 @@ class Run(BaseModel):
         Executes multiple simulation iterations, drawing on each banner according
         to its configured strategy. Yields control periodically to allow UI updates.
 
-        The simulation:
-        1. Iterates through banners in order
-        2. Applies drawing strategy to determine draw behavior
-        3. Tracks pity/definitive/potential counters with inheritance between banners
-        4. Aggregates operator statistics across all iterations
+        The simulation uses BannerResource to track three types of draws:
+        - normal_draws: Carry over between banners, used last
+        - current_banner_draws: From previous banner's next_banner rewards, used second
+        - special_draws: From special_draw rewards, used first (as special draws)
+
+        The strategy prioritizes exhausting non-carryover resources first:
+        1. Special draws (don't carry over, count as special draws)
+        2. Current banner draws (don't carry over, count as normal draws)
+        3. Normal draws (carry over to next banner)
 
         Args:
             player: Optional Player instance to merge results into. If None, creates new.
@@ -364,78 +509,114 @@ class Run(BaseModel):
         iteration = 0
         while repeat > 0:
             player_iter = Player()
-            special_draw = 0
-            reward_draw = 0
-            available_draws = 0 if not self.config else self.config.initial_draws
             repeat -= 1
             iteration += 1
+
+            # Initialize resource for the first banner
+            resource = BannerResource(
+                normal_draws=0 if not self.config else self.config.initial_draws,
+                current_banner_draws=0,
+                special_draws=0,
+            )
             inherited_reward_states: dict[RewardType, int] = {}
+
             for banner in self.banners:
                 # Reset banner state for this simulation iteration
                 banner.reset(inherited_reward_states=inherited_reward_states)
-                # For each banner, first clear out the special draw as they don't carry over.
-                special_draw = 0
-                reward_for_next = 0
+
+                # Track rewards earned during this banner for next banner
+                next_banner_reward_total = 0
                 got_main = False
                 got_pity_without_main = False
-                # Also add the draws for each banner as available
-                available_draws += (
-                    0 if not self.config else self.config.draws_gain_per_banner
-                )
-                # Determine whether to draw or not.
+
+                # Add per-banner draw gains
+                if self.config:
+                    # draws_gain_per_banner goes to normal_draws (carries over)
+                    resource.add_normal_draws(self.config.draws_gain_per_banner)
+                    # draws_gain_this_banner goes to current_banner_draws (doesn't carry over)
+                    resource.add_current_banner_draws(
+                        self.config.draws_gain_this_banner
+                    )
+
+                # Main draw loop - prioritize non-carryover resources
                 while True:
-                    if special_draw > 0:
+                    # Priority 1: Use special_draws first (they don't carry over)
+                    # Special draws are used as is_special_draw=True
+                    if resource.has_special_draws():
+                        # Use all special draws at once (they come in multiples of reward count)
+                        special_to_use = resource.special_draws
+                        resource.consume_special_draws(special_to_use)
                         special, reward, drew_main, pity_miss = player_iter.draw(
                             banner=banner,
-                            repeat=special_draw,
+                            repeat=special_to_use,
                             is_special_draw=True,
                         )
-                        special_draw = 0
-                        special_draw += special
-                        reward_for_next += reward
+                        # Special draws can reward more special draws and next banner draws
+                        resource.add_special_draws(special)
+                        next_banner_reward_total += reward
                         got_main = got_main or drew_main
                         got_pity_without_main = got_pity_without_main or pity_miss
                         continue
-                    if reward_draw > 0:
+
+                    # Priority 2: Use current_banner_draws (they don't carry over)
+                    # These are normal draws, not special draws
+                    if resource.has_current_banner_draws():
+                        # Use all current banner draws
+                        current_to_use = resource.current_banner_draws
+                        resource.consume_current_banner_draws(current_to_use)
                         special, reward, drew_main, pity_miss = player_iter.draw(
                             banner=banner,
-                            repeat=reward_draw,
+                            repeat=current_to_use,
                             is_special_draw=False,
                         )
-                        reward_draw = 0
-                        special_draw += special
-                        reward_for_next += reward
+                        resource.add_special_draws(special)
+                        next_banner_reward_total += reward
                         got_main = got_main or drew_main
                         got_pity_without_main = got_pity_without_main or pity_miss
                         continue
-                    draw_amount = self._get_next_draw_amount(
-                        current_available=available_draws,
+
+                    # Priority 3: Check if we should continue with normal draws
+                    if not self._should_continue_drawing(
+                        resource=resource,
                         banner=banner,
                         got_main=got_main,
                         got_pity_without_main=got_pity_without_main,
-                    )
-                    if draw_amount <= 0:
+                    ):
                         break
-                    # If the draw amount exceeds current available, pay for that.
-                    available_draws -= draw_amount
-                    if available_draws < 0:
-                        self.paid_draws += -available_draws
-                        available_draws = 0
+
+                    # Determine draw amount (1 or 10)
+                    draw_amount = self._get_draw_amount(
+                        resource=resource, banner=banner
+                    )
+
+                    # Consume from normal_draws, pay if needed
+                    consumed = resource.consume_normal_draws(draw_amount)
+                    shortfall = draw_amount - consumed
+                    if shortfall > 0:
+                        # Need to pay for the shortfall
+                        self.paid_draws += shortfall
+
                     # Draw the desired amount
                     special, reward, drew_main, pity_miss = player_iter.draw(
                         banner=banner,
                         repeat=draw_amount,
                         is_special_draw=False,
                     )
-                    special_draw += special
-                    reward_for_next += reward
+                    resource.add_special_draws(special)
+                    next_banner_reward_total += reward
                     got_main = got_main or drew_main
                     got_pity_without_main = got_pity_without_main or pity_miss
-                    continue
-                # Continue to next banner, track total draws for this banner
+
+                # Track total draws for this banner
                 self.total_draws += banner.draws_accumulated_total
-                reward_draw = reward_for_next
+
+                # Prepare resource for next banner:
+                # - normal_draws carry over
+                # - current_banner_draws reset, replaced by this banner's next_banner_reward
+                # - special_draws reset
+                resource = resource.prepare_for_next_banner(next_banner_reward_total)
                 inherited_reward_states = banner.get_inherited_reward_states()
+
             # Finish one iteration. Merge the box.
             player.merge(other_player=player_iter)
 
