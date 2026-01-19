@@ -29,6 +29,9 @@ def serialize_state() -> str:
             "num_experiments": results["num_experiments"],
             "banners": results["banners"],
             "main_operators": results.get("main_operators", []),
+            "total_banner_count": results.get(
+                "total_banner_count", len(results["banners"])
+            ),
         }
 
     state = {
@@ -43,6 +46,9 @@ def serialize_state() -> str:
         "current_strategy_idx": st.session_state.current_strategy_idx,
         "run_banner_enabled": st.session_state.get("run_banner_enabled", {}),
         "run_banner_strategies": st.session_state.get("run_banner_strategies", {}),
+        "auto_banner_count": st.session_state.get("auto_banner_count", 0),
+        "auto_banner_template_idx": st.session_state.get("auto_banner_template_idx", 0),
+        "auto_banner_strategy_idx": st.session_state.get("auto_banner_strategy_idx", 0),
         "run_results": run_results_data,
     }
     json_str = json.dumps(state, ensure_ascii=False)
@@ -121,6 +127,14 @@ def initialize_session_state():
                 st.session_state.run_banner_strategies = state.get(
                     "run_banner_strategies", {}
                 )
+                # Load auto banner config
+                st.session_state.auto_banner_count = state.get("auto_banner_count", 0)
+                st.session_state.auto_banner_template_idx = state.get(
+                    "auto_banner_template_idx", 0
+                )
+                st.session_state.auto_banner_strategy_idx = state.get(
+                    "auto_banner_strategy_idx", 0
+                )
                 # Load run results
                 if "run_results" in state and state["run_results"]:
                     run_data = state["run_results"]
@@ -131,6 +145,9 @@ def initialize_session_state():
                         "num_experiments": run_data["num_experiments"],
                         "banners": run_data["banners"],
                         "main_operators": run_data.get("main_operators", []),
+                        "total_banner_count": run_data.get(
+                            "total_banner_count", len(run_data["banners"])
+                        ),
                     }
                 else:
                     st.session_state.run_results = None
@@ -151,3 +168,6 @@ def _initialize_defaults():
     st.session_state.current_strategy_idx = 0
     st.session_state.run_banner_enabled = {}
     st.session_state.run_banner_strategies = {}
+    st.session_state.auto_banner_count = 0
+    st.session_state.auto_banner_template_idx = 0
+    st.session_state.auto_banner_strategy_idx = 0

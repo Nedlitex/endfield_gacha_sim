@@ -392,6 +392,82 @@ EndFieldBannerTemplate = BannerTemplate(
 )
 
 
+def create_next_banner(
+    template: "BannerTemplate",
+    default_operators: list["Operator"],
+    previous_banners: list["Banner"],
+    banner_name: Optional[str] = None,
+    banner_index: Optional[int] = None,
+    main_operator: Optional["Operator"] = None,
+) -> "Banner":
+    """Create a new banner using the template and inheriting main operators from previous banners.
+
+    This is the shared banner creation routine used by both UI and simulation.
+
+    Args:
+        template: The banner template to use for the new banner.
+        default_operators: List of default operators to include in the banner.
+        previous_banners: List of previous banners to inherit main operators from.
+        banner_name: Optional name for the banner. If not provided, generates one.
+        banner_index: Optional index for naming auto-generated banners.
+        main_operator: Optional main operator. If not provided, creates a dummy one.
+
+    Returns:
+        A new Banner instance with properly populated operators.
+    """
+    # Group default operators by rarity
+    banner_operators: dict[int, list[Operator]] = {}
+    for op in default_operators:
+        if op.rarity not in banner_operators:
+            banner_operators[op.rarity] = []
+        banner_operators[op.rarity].append(op.model_copy(deep=True))
+
+    # Determine banner name
+    if banner_name is None:
+        if banner_index is not None:
+            banner_name = f"卡池_{banner_index}"
+        else:
+            banner_name = f"卡池_{len(previous_banners) + 1}"
+
+    # Create or use provided main operator
+    if main_operator is None:
+        idx = banner_index if banner_index is not None else len(previous_banners) + 1
+        highest_rarity = max(template.rarities)
+        main_operator = Operator(name=f"新干员_{idx}", rarity=highest_rarity, banner=banner_name)  # type: ignore
+
+    # Add main operator to the pool
+    main_rarity = main_operator.rarity
+    if main_rarity not in banner_operators:
+        banner_operators[main_rarity] = []
+    # Insert at the beginning
+    banner_operators[main_rarity].insert(0, main_operator.model_copy(deep=True))
+
+    # Inherit main operators from previous banners based on template policy
+    inherit_count = template.inherit_main_from_previous_banners
+    if inherit_count > 0:
+        # Get the last N banners' main operators
+        prev_mains: list[Operator] = []
+        for banner in previous_banners[-inherit_count:]:
+            if banner.main_operator:
+                prev_mains.append(banner.main_operator)
+
+        # Add them to the pool, avoiding duplicates
+        for prev_main in prev_mains:
+            rarity = prev_main.rarity
+            if rarity not in banner_operators:
+                banner_operators[rarity] = []
+            existing_names = [op.name for op in banner_operators[rarity]]
+            if prev_main.name not in existing_names:
+                banner_operators[rarity].insert(0, prev_main.model_copy(deep=True))
+
+    return Banner(  # type: ignore
+        name=banner_name,
+        operators=banner_operators,
+        main_operator=main_operator,
+        template=template.model_copy(deep=True),
+    )
+
+
 class Operator(BaseModel):
     """Represents a gacha operator/character with their stats across simulations."""
 

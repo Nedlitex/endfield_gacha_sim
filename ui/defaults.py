@@ -153,4 +153,26 @@ def create_default_strategies() -> list[DrawStrategy]:
             ],
             default_action=ContinueAction(stop_on_main=True),
         ),
+        # If < 120 draws: draw 30 (stop early if got 6-star); if >= 120: draw until UP
+        DrawStrategy(
+            name="没有120抽就抽30拿特殊十连(不氪金)",
+            behavior=DrawBehavior(pay=False),
+            rules=[
+                # If available draws < 120 at entry, draw up to 30 and stop on highest rarity
+                StrategyRule(
+                    conditions=[
+                        ResourceThresholdCondition(
+                            max_normal_draws=119, check_once=True
+                        )
+                    ],
+                    action=ContinueAction(
+                        max_draws_per_banner=30,
+                        stop_on_highest_rarity=True,
+                    ),
+                    priority=100,
+                ),
+            ],
+            # Default: if >= 120 draws, draw until UP
+            default_action=ContinueAction(stop_on_main=True),
+        ),
     ]

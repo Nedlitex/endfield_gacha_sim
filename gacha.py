@@ -3,7 +3,14 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from banner import Banner, DrawResult, Operator, RewardType
+from banner import (
+    Banner,
+    BannerTemplate,
+    DrawResult,
+    Operator,
+    RewardType,
+    create_next_banner,
+)
 from strategy import DrawStrategy, EvaluationContext
 
 
@@ -314,6 +321,9 @@ class Run(BaseModel):
         banner_strategies: Per-banner strategy overrides, keyed by banner name.
         banners: List of banners to simulate drawing on, in order.
         repeat: Number of simulation iterations to run.
+        auto_banner_template: Template for auto-generated banners (default: last banner's template).
+        auto_banner_strategy: Strategy for auto-generated banners (optional).
+        auto_banner_count: Number of banners to auto-generate after exhausting given banners (0 = no auto).
     """
 
     paid_draws: int = Field(
@@ -331,6 +341,23 @@ class Run(BaseModel):
     )
     banners: list[Banner] = Field(default=[], description="All banners to draw from")
     repeat: int = Field(default=1, description="Total number of simulations to run")
+    auto_banner_template: Optional[BannerTemplate] = Field(
+        default=None,
+        description="Template for auto-generated banners (default: last banner's template)",
+    )
+    auto_banner_strategy: Optional[DrawStrategy] = Field(
+        default=None,
+        description="Strategy for auto-generated banners",
+    )
+    auto_banner_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of banners to auto-generate after exhausting given banners (0 = no auto)",
+    )
+    auto_banner_default_operators: list[Operator] = Field(
+        default=[],
+        description="Default operators to include in auto-generated banners",
+    )
 
     def _get_draw_strategy_for_banner(self, banner: Banner) -> Optional[DrawStrategy]:
         """Get the draw strategy configured for a specific banner.
@@ -344,6 +371,29 @@ class Run(BaseModel):
         if banner.name in self.banner_strategies:
             return self.banner_strategies[banner.name]
         return None
+
+    def _create_auto_banner(
+        self,
+        index: int,
+        template: BannerTemplate,
+        previous_banners: list[Banner],
+    ) -> Banner:
+        """Create an auto-generated banner using the shared banner creation routine.
+
+        Args:
+            index: The 1-based index of the auto-generated banner.
+            template: The template to use for the banner.
+            previous_banners: List of previous banners to inherit main operators from.
+
+        Returns:
+            A new Banner instance with properly populated operators.
+        """
+        return create_next_banner(
+            template=template,
+            default_operators=self.auto_banner_default_operators,
+            previous_banners=previous_banners,
+            banner_name=f"自动池{index}",
+        )
 
     def _should_continue_drawing(
         self,
@@ -461,13 +511,25 @@ class Run(BaseModel):
         # Reset counters at the start of simulation
         self.paid_draws = 0
         self.total_draws = 0
-        total = self.repeat
-        repeat = total
-        iteration = 0
-        while repeat > 0:
+        repeat_count = self.repeat
+        repeat_remaining = repeat_count
+
+        # Determine template for auto-generated banners
+        auto_template: Optional[BannerTemplate] = self.auto_banner_template
+        if auto_template is None and self.auto_banner_count > 0 and self.banners:
+            # Default to last banner's template
+            auto_template = self.banners[-1].template
+
+        # Total number of banners (original + auto-generated)
+        total_banner_count = len(self.banners) + self.auto_banner_count
+
+        # Progress tracking: count by banners across all repeats
+        total_banners_to_process = repeat_count * total_banner_count
+        banners_processed = 0
+
+        while repeat_remaining > 0:
             player_iter = Player()
-            repeat -= 1
-            iteration += 1
+            repeat_remaining -= 1
 
             # Initialize resource for the first banner
             resource = BannerResource(
@@ -477,7 +539,31 @@ class Run(BaseModel):
             )
             inherited_reward_states: dict[RewardType, int] = {}
 
-            for banner_index, banner in enumerate(self.banners):
+            # Track current auto banner for cleanup and previous banners for inheritance
+            current_auto_banner: Optional[Banner] = None
+            # Track banners processed in this iteration for main operator inheritance
+            processed_banners: list[Banner] = []
+
+            banner_index = 0
+            while banner_index < total_banner_count:
+                # Get or create the banner for this index
+                if banner_index < len(self.banners):
+                    # Use existing banner
+                    banner = self.banners[banner_index]
+                else:
+                    # Create auto banner on-demand, passing all previous banners
+                    # (original banners + previously created auto banners)
+                    auto_index = banner_index - len(self.banners) + 1
+                    previous_for_inherit = (
+                        self.banners + processed_banners[len(self.banners) :]
+                    )
+                    current_auto_banner = self._create_auto_banner(
+                        auto_index, auto_template, previous_for_inherit  # type: ignore
+                    )
+                    banner = current_auto_banner
+                    # Register strategy for auto-generated banner
+                    if self.auto_banner_strategy:
+                        self.banner_strategies[banner.name] = self.auto_banner_strategy
                 # Reset banner state for this simulation iteration
                 banner.reset(inherited_reward_states=inherited_reward_states)
 
@@ -620,17 +706,29 @@ class Run(BaseModel):
                 resource = resource.prepare_for_next_banner(next_banner_reward_total)
                 inherited_reward_states = banner.get_inherited_reward_states()
 
+                # Track this banner for main operator inheritance in future auto banners
+                processed_banners.append(banner)
+
+                # Clean up auto banner strategy registration to avoid memory buildup
+                if current_auto_banner is not None:
+                    self.banner_strategies.pop(current_auto_banner.name, None)
+                    current_auto_banner = None
+
+                # Move to next banner
+                banner_index += 1
+                banners_processed += 1
+
+                # Yield control to event loop periodically and report progress
+                if banners_processed % yield_every == 0:
+                    if progress_callback:
+                        progress_callback(banners_processed, total_banners_to_process)
+                    await asyncio.sleep(0)
+
             # Finish one iteration. Merge the box.
             player.merge(other_player=player_iter)
 
-            # Yield control to event loop periodically and report progress
-            if iteration % yield_every == 0:
-                if progress_callback:
-                    progress_callback(iteration, total)
-                await asyncio.sleep(0)
-
         # Final progress update
         if progress_callback:
-            progress_callback(total, total)
+            progress_callback(total_banners_to_process, total_banners_to_process)
 
         return player

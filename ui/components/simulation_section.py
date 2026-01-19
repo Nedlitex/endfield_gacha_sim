@@ -6,8 +6,10 @@ import pandas as pd
 import streamlit as st
 
 from banner import Banner
-from gacha import Config, DrawStrategy, Run
+from gacha import Config, Run
+from strategy import DrawStrategy
 from ui.constants import RARITY_COLORS
+from ui.defaults import create_default_operators
 from ui.state import update_url
 
 
@@ -24,6 +26,11 @@ def _on_run_strategy_change(banner_name: str):
     st.session_state.run_banner_strategies[banner_name] = st.session_state[
         f"run_config_{banner_name}"
     ]
+    update_url()
+
+
+def _on_auto_banner_config_change():
+    """Callback when auto banner configuration changes."""
     update_url()
 
 
@@ -53,9 +60,12 @@ def render_simulation_section():
     # Banner selection and config
     _render_banner_selection()
 
+    # Auto banner configuration
+    auto_config = _render_auto_banner_config()
+
     # Run button
     if st.session_state.banners:
-        _render_run_button(num_experiments)
+        _render_run_button(num_experiments, auto_config)
 
     # Display results
     if st.session_state.run_results:
@@ -115,7 +125,77 @@ def _render_banner_selection():
         st.info("暂无卡池，请先创建卡池。")
 
 
-def _render_run_button(num_experiments: int):
+def _render_auto_banner_config() -> dict:
+    """Render the auto banner configuration section.
+
+    Returns:
+        Dictionary with auto banner settings:
+        - count: Number of banners to auto-generate
+        - template_idx: Index of the template to use
+        - strategy_idx: Index of the strategy to use
+    """
+    st.subheader("自动添加卡池")
+    st.caption("在已有卡池之后自动生成更多卡池继续模拟")
+
+    with st.container(border=True):
+        # Get stored value or default
+        default_count = st.session_state.get("auto_banner_count", 0)
+        auto_count = st.number_input(
+            "自动添加卡池数量",
+            min_value=0,
+            max_value=1000,
+            value=default_count,
+            step=1,
+            key="auto_banner_count",
+            help="0表示不自动添加卡池",
+            on_change=_on_auto_banner_config_change,
+        )
+
+        if auto_count > 0:
+            col1, col2 = st.columns(2)
+            with col1:
+                # Template selection
+                template_names = [t.name for t in st.session_state.banner_templates]
+                default_template_idx = min(
+                    st.session_state.get("auto_banner_template_idx", 0),
+                    len(template_names) - 1,
+                )
+                auto_template_idx = st.selectbox(
+                    "卡池模板",
+                    range(len(template_names)),
+                    index=default_template_idx,
+                    format_func=lambda x: template_names[x],
+                    key="auto_banner_template_idx",
+                    help="自动生成卡池使用的模板",
+                    on_change=_on_auto_banner_config_change,
+                )
+            with col2:
+                # Strategy selection
+                strategy_names = [s.name for s in st.session_state.strategies]
+                default_strategy_idx = min(
+                    st.session_state.get("auto_banner_strategy_idx", 0),
+                    len(strategy_names) - 1,
+                )
+                auto_strategy_idx = st.selectbox(
+                    "抽卡策略",
+                    range(len(strategy_names)),
+                    index=default_strategy_idx,
+                    format_func=lambda x: strategy_names[x],
+                    key="auto_banner_strategy_idx",
+                    help="自动生成卡池使用的策略",
+                    on_change=_on_auto_banner_config_change,
+                )
+
+            return {
+                "count": auto_count,
+                "template_idx": auto_template_idx,
+                "strategy_idx": auto_strategy_idx,
+            }
+
+    return {"count": 0, "template_idx": 0, "strategy_idx": 0}
+
+
+def _render_run_button(num_experiments: int, auto_config: dict):
     """Render the run simulation button and execute simulation."""
     if st.button("运行模拟", type="primary"):
         # Build list of enabled banners
@@ -149,12 +229,44 @@ def _render_run_button(num_experiments: int):
         if enabled_banners:
             # Convert banners to dicts and back to ensure clean Pydantic validation
             banners_for_run = [Banner(**b.model_dump()) for b in enabled_banners]
+
+            # Build auto banner configuration
+            auto_banner_template = None
+            auto_banner_strategy = None
+            auto_banner_count = auto_config.get("count", 0)
+            auto_banner_default_operators = []
+
+            if auto_banner_count > 0:
+                # Get template for auto banners
+                template_idx = auto_config.get("template_idx", 0)
+                if template_idx < len(st.session_state.banner_templates):
+                    auto_banner_template = st.session_state.banner_templates[
+                        template_idx
+                    ].model_copy(deep=True)
+
+                # Get strategy for auto banners
+                strategy_idx = auto_config.get("strategy_idx", 0)
+                if strategy_idx < len(st.session_state.strategies):
+                    auto_banner_strategy = DrawStrategy(
+                        **st.session_state.strategies[strategy_idx].model_dump()
+                    )
+
+                # Get default operators for auto banners
+                auto_banner_default_operators = create_default_operators()
+
             run = Run(
                 config=Config(**st.session_state.config.model_dump()),
                 banner_strategies=banner_strategies,
                 banners=banners_for_run,
                 repeat=num_experiments,
+                auto_banner_template=auto_banner_template,
+                auto_banner_strategy=auto_banner_strategy,
+                auto_banner_count=auto_banner_count,
+                auto_banner_default_operators=auto_banner_default_operators,
             )
+
+            # Calculate total banners for progress display
+            total_banners = len(enabled_banners) + auto_banner_count
 
             # Run async simulation with progress bar
             progress_bar = st.progress(0, text=f"正在运行模拟... 0/{num_experiments}")
@@ -174,15 +286,24 @@ def _render_run_button(num_experiments: int):
             result_player = asyncio.run(run_async())
             progress_bar.empty()
 
+            # Build banner names list including auto banners
+            banner_names = [b.name for b in enabled_banners]
+            if auto_banner_count > 0:
+                banner_names.append(f"自动池×{auto_banner_count}")
+
+            # Build main operators list (auto banners have dummy operators)
+            main_operators = [
+                b.main_operator.name for b in enabled_banners if b.main_operator
+            ]
+
             st.session_state.run_results = {
                 "player": result_player,
                 "paid_draws": run.paid_draws,
                 "total_draws": run.total_draws,
                 "num_experiments": num_experiments,
-                "banners": [b.name for b in enabled_banners],
-                "main_operators": [
-                    b.main_operator.name for b in enabled_banners if b.main_operator
-                ],
+                "banners": banner_names,
+                "main_operators": main_operators,
+                "total_banner_count": total_banners,
             }
             update_url()
             st.rerun()
@@ -197,7 +318,8 @@ def _render_results():
     player = results["player"]
     num_exp = results["num_experiments"]
 
-    num_banners = len(results["banners"])
+    # Use total_banner_count if available (includes auto banners), otherwise len(banners)
+    num_banners = results.get("total_banner_count", len(results["banners"]))
     avg_total_per_run = results["total_draws"] / num_exp if num_exp > 0 else 0
     avg_total_per_banner = avg_total_per_run / num_banners if num_banners > 0 else 0
     avg_paid_per_run = results["paid_draws"] / num_exp if num_exp > 0 else 0
@@ -226,7 +348,7 @@ def _render_results():
 
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("每池平均总抽数", f"{avg_total_per_banner:.1f}")
+        st.metric("每池平均总抽数(含赠送抽)", f"{avg_total_per_banner:.1f}")
     with col2:
         st.metric("每池平均氪金抽数", f"{avg_paid_per_banner:.1f}")
 
@@ -342,17 +464,7 @@ def _render_histograms(operators_with_buckets: list):
                     # Build histogram data with consistent buckets
                     bucket_labels = []
                     bucket_values = []
-                    # Add special bucket first if any operator has it
-                    if has_special_bucket:
-                        bucket_labels.append("sp")
-                        count = op.draw_buckets.get(-1, 0)
-                        pct = (
-                            (count / op.first_draw_count * 100)
-                            if op.first_draw_count > 0
-                            else 0
-                        )
-                        bucket_values.append(pct)
-                    # Add normal buckets
+                    # Add normal buckets first (numeric order)
                     for bucket in range(min_bucket, max_bucket + 10, 10):
                         bucket_labels.append(str(bucket))
                         count = op.draw_buckets.get(bucket, 0)
@@ -362,10 +474,22 @@ def _render_histograms(operators_with_buckets: list):
                             else 0
                         )
                         bucket_values.append(pct)
-                    # Create chart data
+                    # Add special bucket at the end if any operator has it
+                    if has_special_bucket:
+                        bucket_labels.append("sp")
+                        count = op.draw_buckets.get(-1, 0)
+                        pct = (
+                            (count / op.first_draw_count * 100)
+                            if op.first_draw_count > 0
+                            else 0
+                        )
+                        bucket_values.append(pct)
+                    # Create chart data with categorical ordering to prevent sorting
                     chart_df = pd.DataFrame(
                         {
-                            "抽数": bucket_labels,
+                            "抽数": pd.Categorical(
+                                bucket_labels, categories=bucket_labels, ordered=True
+                            ),
                             "概率%": bucket_values,
                         }
                     )
