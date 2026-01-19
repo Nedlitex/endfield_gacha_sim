@@ -1,3 +1,5 @@
+"""Gacha simulation engine."""
+
 import asyncio
 from typing import Optional
 

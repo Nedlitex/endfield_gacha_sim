@@ -138,13 +138,18 @@ def _render_auto_banner_config() -> dict:
     st.caption("在已有卡池之后自动生成更多卡池继续模拟")
 
     with st.container(border=True):
-        # Get stored value or default
-        default_count = st.session_state.get("auto_banner_count", 0)
+        # Initialize session state defaults if not present
+        if "auto_banner_count" not in st.session_state:
+            st.session_state.auto_banner_count = 0
+        if "auto_banner_template_idx" not in st.session_state:
+            st.session_state.auto_banner_template_idx = 0
+        if "auto_banner_strategy_idx" not in st.session_state:
+            st.session_state.auto_banner_strategy_idx = 0
+
         auto_count = st.number_input(
             "自动添加卡池数量",
             min_value=0,
             max_value=1000,
-            value=default_count,
             step=1,
             key="auto_banner_count",
             help="0表示不自动添加卡池",
@@ -156,14 +161,12 @@ def _render_auto_banner_config() -> dict:
             with col1:
                 # Template selection
                 template_names = [t.name for t in st.session_state.banner_templates]
-                default_template_idx = min(
-                    st.session_state.get("auto_banner_template_idx", 0),
-                    len(template_names) - 1,
-                )
+                # Clamp index to valid range
+                if st.session_state.auto_banner_template_idx >= len(template_names):
+                    st.session_state.auto_banner_template_idx = 0
                 auto_template_idx = st.selectbox(
                     "卡池模板",
                     range(len(template_names)),
-                    index=default_template_idx,
                     format_func=lambda x: template_names[x],
                     key="auto_banner_template_idx",
                     help="自动生成卡池使用的模板",
@@ -172,14 +175,12 @@ def _render_auto_banner_config() -> dict:
             with col2:
                 # Strategy selection
                 strategy_names = [s.name for s in st.session_state.strategies]
-                default_strategy_idx = min(
-                    st.session_state.get("auto_banner_strategy_idx", 0),
-                    len(strategy_names) - 1,
-                )
+                # Clamp index to valid range
+                if st.session_state.auto_banner_strategy_idx >= len(strategy_names):
+                    st.session_state.auto_banner_strategy_idx = 0
                 auto_strategy_idx = st.selectbox(
                     "抽卡策略",
                     range(len(strategy_names)),
-                    index=default_strategy_idx,
                     format_func=lambda x: strategy_names[x],
                     key="auto_banner_strategy_idx",
                     help="自动生成卡池使用的策略",
