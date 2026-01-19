@@ -549,7 +549,6 @@ with col1:
         range(len(strategy_names)),
         index=st.session_state.current_strategy_idx,
         format_func=lambda x: strategy_names[x],
-        key="strategy_selector",
     )
     if selected_strategy_idx != st.session_state.current_strategy_idx:
         st.session_state.current_strategy_idx = selected_strategy_idx
@@ -748,7 +747,6 @@ with col_create:
             st.session_state.strategies.append(DrawStrategy(name=new_strategy_name))
             new_idx = len(st.session_state.strategies) - 1
             st.session_state.current_strategy_idx = new_idx
-            st.session_state.strategy_selector = new_idx  # Sync selectbox state
             update_url()
             st.rerun()
 with col_delete:
