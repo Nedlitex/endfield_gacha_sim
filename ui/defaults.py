@@ -175,4 +175,23 @@ def create_default_strategies() -> list[DrawStrategy]:
             # Default: if >= 120 draws, draw until UP
             default_action=ContinueAction(stop_on_main=True),
         ),
+        *create_decision_tree_strategies(),
+    ]
+
+
+def create_decision_tree_strategies() -> list[DrawStrategy]:
+    """Create simple utility strategies."""
+    return [
+        DrawStrategy(
+            name="抽到保底",
+            behavior=DrawBehavior(pay=False),
+            rules=[],
+            default_action=ContinueAction(stop_on_main=True),
+        ),
+        DrawStrategy(
+            name="氪金抽到保底",
+            behavior=DrawBehavior(pay=True),
+            rules=[],
+            default_action=ContinueAction(stop_on_main=True),
+        ),
     ]

@@ -407,6 +407,7 @@ class Run(BaseModel):
         got_highest_rarity_but_not_main: bool = False,
         got_pity_without_main: bool = False,
         current_potential: int = 0,
+        pity_counter: int = 0,
     ) -> bool:
         """Determine if we should continue drawing based on strategy rules.
 
@@ -419,6 +420,7 @@ class Run(BaseModel):
             got_highest_rarity_but_not_main: Whether highest rarity obtained but not main.
             got_pity_without_main: Whether pity was triggered without getting main.
             current_potential: Current number of copies of main operator obtained.
+            pity_counter: Current pity counter (draws since last highest rarity).
 
         Returns:
             True if we should continue drawing, False to stop.
@@ -437,6 +439,7 @@ class Run(BaseModel):
             got_pity_without_main=got_pity_without_main,
             current_potential=current_potential,
             banner_index=banner_index,
+            pity_counter=pity_counter,
         )
 
         # Build strategy registry for delegation lookup
@@ -449,6 +452,7 @@ class Run(BaseModel):
         resource: BannerResource,
         banner: Banner,
         banner_index: int,
+        pity_counter: int = 0,
     ) -> int:
         """Determine how many draws to perform (1 or 10).
 
@@ -456,6 +460,7 @@ class Run(BaseModel):
             resource: The current banner resource state.
             banner: The banner being drawn on.
             banner_index: The 0-based index of the current banner.
+            pity_counter: Current pity counter (draws since last highest rarity).
 
         Returns:
             Number of draws to perform (1 or 10).
@@ -469,6 +474,7 @@ class Run(BaseModel):
             draws_accumulated=banner.draws_accumulated,
             normal_draws=resource.normal_draws,
             banner_index=banner_index,
+            pity_counter=pity_counter,
         )
 
         # Build strategy registry for delegation lookup
@@ -650,6 +656,8 @@ class Run(BaseModel):
                         continue
 
                     # Priority 3: Check if we should continue with normal draws
+                    # Get current pity counter from banner
+                    current_pity = banner.reward_states[RewardType.PITY].counter
                     if not self._should_continue_drawing(
                         resource=resource,
                         banner=banner,
@@ -659,12 +667,16 @@ class Run(BaseModel):
                         got_highest_rarity_but_not_main=got_highest_rarity_but_not_main,
                         got_pity_without_main=got_pity_without_main,
                         current_potential=current_potential,
+                        pity_counter=current_pity,
                     ):
                         break
 
                     # Determine draw amount (1 or 10)
                     draw_amount = self._get_draw_amount(
-                        resource=resource, banner=banner, banner_index=banner_index
+                        resource=resource,
+                        banner=banner,
+                        banner_index=banner_index,
+                        pity_counter=current_pity,
                     )
 
                     # Consume from normal_draws, pay if needed

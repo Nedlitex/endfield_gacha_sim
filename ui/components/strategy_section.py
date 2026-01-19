@@ -13,6 +13,7 @@ from strategy import (
     GotHighestRarityCondition,
     GotMainCondition,
     GotPityWithoutMainCondition,
+    PityCounterCondition,
     ResourceThresholdCondition,
     StopAction,
     StrategyCondition,
@@ -202,7 +203,16 @@ def _condition_to_text(cond: StrategyCondition) -> str:
     elif isinstance(cond, BannerIndexCondition):
         if cond.every_n <= 1:
             return "每个池子"
-        return f"每{cond.every_n}个池子"
+        if cond.offset == 0:
+            return f"每{cond.every_n}个池子的第1个"
+        return f"每{cond.every_n}个池子的第{cond.offset + 1}个"
+    elif isinstance(cond, PityCounterCondition):
+        parts = []
+        if cond.min_pity is not None:
+            parts.append(f"保底计数>={cond.min_pity}")
+        if cond.max_pity is not None:
+            parts.append(f"保底计数<={cond.max_pity}")
+        return " 且 ".join(parts) if parts else "任意保底计数"
     return str(cond)
 
 
@@ -222,6 +232,8 @@ def _action_to_text(action) -> str:
             parts.append("抽到最高星级后停止")
         if action.target_potential:
             parts.append(f"目标{action.target_potential}潜能")
+        if action.target_pity:
+            parts.append(f"抽到{action.target_pity}保底计数")
         return "继续抽卡" + (f" ({', '.join(parts)})" if parts else "")
     elif isinstance(action, DelegateAction):
         return f"执行策略「{action.strategy_name}」"
@@ -375,15 +387,61 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
         help="仅在特定序号的池子生效(从第1个池子开始计数)",
     )
     banner_every_n = 0
+    banner_offset = 0
     if use_banner_index:
-        banner_every_n = st.number_input(
-            "每N个池子",
-            min_value=0,
-            value=2,
-            step=1,
-            key=f"{prefix}new_rule_banner_every_n",
-            help="0=每个池子, 2=第1,3,5...个池子, 3=第1,4,7...个池子",
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            banner_every_n = st.number_input(
+                "每N个池子",
+                min_value=0,
+                value=2,
+                step=1,
+                key=f"{prefix}new_rule_banner_every_n",
+                help="0=每个池子, 2=每2个池子中选1个",
+            )
+        with col2:
+            max_offset = max(0, banner_every_n - 1) if banner_every_n > 1 else 0
+            banner_offset = st.number_input(
+                "偏移量",
+                min_value=0,
+                max_value=max(1, max_offset),
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_banner_offset",
+                help="0=第1,3,5...个, 1=第2,4,6...个",
+            )
+
+    # Pity counter condition
+    use_pity_counter = st.checkbox(
+        "保底计数条件",
+        key=f"{prefix}new_rule_use_pity_counter",
+        help="距离上次出最高星级的抽数",
+    )
+    pity_counter_min = None
+    pity_counter_max = None
+    if use_pity_counter:
+        col1, col2 = st.columns(2)
+        with col1:
+            pity_counter_min = st.number_input(
+                "最小保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_pity_counter_min",
+            )
+            if pity_counter_min == 0:
+                pity_counter_min = None
+        with col2:
+            pity_counter_max = st.number_input(
+                "最大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_pity_counter_max",
+                help="0表示不限制",
+            )
+            if pity_counter_max == 0:
+                pity_counter_max = None
 
     # Action
     st.markdown("**动作**")
@@ -434,15 +492,26 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 key=f"{prefix}new_rule_action_stop_on_highest_rarity",
             )
 
-        target_potential = st.number_input(
-            "目标潜能",
-            min_value=0,
-            max_value=6,
-            value=0,
-            step=1,
-            key=f"{prefix}new_rule_action_target_potential",
-            help="0表示不限制潜能",
-        )
+        col5, col6 = st.columns(2)
+        with col5:
+            target_potential = st.number_input(
+                "目标潜能",
+                min_value=0,
+                max_value=6,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_action_target_potential",
+                help="0表示不限制潜能",
+            )
+        with col6:
+            target_pity = st.number_input(
+                "目标保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}new_rule_action_target_pity",
+                help="抽到此保底计数后停止(0=不限制)",
+            )
 
         action = ContinueAction(
             min_draws_per_banner=min_draws,
@@ -450,6 +519,7 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
             stop_on_main=stop_on_main,
             stop_on_highest_rarity=stop_on_highest_rarity,
             target_potential=target_potential if target_potential > 0 else None,
+            target_pity=target_pity if target_pity > 0 else None,
         )
     elif action_type == "delegate":
         other_strategies = _get_other_strategy_names()
@@ -503,7 +573,20 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 if use_pity:
                     conditions.append(GotPityWithoutMainCondition(value=pity_value))
                 if use_banner_index:
-                    conditions.append(BannerIndexCondition(every_n=banner_every_n))
+                    conditions.append(
+                        BannerIndexCondition(
+                            every_n=banner_every_n, offset=banner_offset
+                        )
+                    )
+                if use_pity_counter and (
+                    pity_counter_min is not None or pity_counter_max is not None
+                ):
+                    conditions.append(
+                        PityCounterCondition(
+                            min_pity=pity_counter_min,
+                            max_pity=pity_counter_max,
+                        )
+                    )
 
                 # Create rule
                 new_rule = StrategyRule(
@@ -566,6 +649,9 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
         current_potential = (
             action.target_potential if isinstance(action, ContinueAction) else None
         )
+        current_target_pity = (
+            action.target_pity if isinstance(action, ContinueAction) else None
+        )
 
         col1, col2 = st.columns(2)
         with col1:
@@ -601,15 +687,26 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
                 key=f"{prefix}default_action_stop_on_highest_rarity",
             )
 
-        target_potential = st.number_input(
-            "目标潜能",
-            min_value=0,
-            max_value=6,
-            value=current_potential if current_potential else 0,
-            step=1,
-            key=f"{prefix}default_action_target_potential",
-            help="0表示不限制潜能",
-        )
+        col5, col6 = st.columns(2)
+        with col5:
+            target_potential = st.number_input(
+                "目标潜能",
+                min_value=0,
+                max_value=6,
+                value=current_potential if current_potential else 0,
+                step=1,
+                key=f"{prefix}default_action_target_potential",
+                help="0表示不限制潜能",
+            )
+        with col6:
+            target_pity = st.number_input(
+                "目标保底计数",
+                min_value=0,
+                value=current_target_pity if current_target_pity else 0,
+                step=1,
+                key=f"{prefix}default_action_target_pity",
+                help="抽到此保底计数后停止(0=不限制)",
+            )
 
         new_action = ContinueAction(
             min_draws_per_banner=min_draws,
@@ -617,6 +714,7 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
             stop_on_main=stop_on_main,
             stop_on_highest_rarity=stop_on_highest_rarity,
             target_potential=target_potential if target_potential > 0 else None,
+            target_pity=target_pity if target_pity > 0 else None,
         )
     elif action_type == "delegate":
         other_strategies = _get_other_strategy_names()
@@ -794,15 +892,26 @@ def _render_strategy_creation_dialog():
                 help="抽到此数量后停止(0=不限制)",
             )
 
-        new_target_potential = st.number_input(
-            "目标潜能",
-            min_value=0,
-            max_value=6,
-            value=0,
-            step=1,
-            key=f"{prefix}target_potential",
-            help="0表示不限制",
-        )
+        col8, col9 = st.columns(2)
+        with col8:
+            new_target_potential = st.number_input(
+                "目标潜能",
+                min_value=0,
+                max_value=6,
+                value=0,
+                step=1,
+                key=f"{prefix}target_potential",
+                help="0表示不限制",
+            )
+        with col9:
+            new_target_pity = st.number_input(
+                "目标保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{prefix}target_pity",
+                help="抽到此保底计数后停止(0=不限制)",
+            )
 
         new_default_action = ContinueAction(
             min_draws_per_banner=new_min_draws,
@@ -810,6 +919,7 @@ def _render_strategy_creation_dialog():
             stop_on_main=new_stop_on_main,
             stop_on_highest_rarity=new_stop_on_highest_rarity,
             target_potential=new_target_potential if new_target_potential > 0 else None,
+            target_pity=new_target_pity if new_target_pity > 0 else None,
         )
 
     # Check for duplicate name
@@ -1003,15 +1113,61 @@ def _render_creation_rule_editor(prefix: str):
         help="仅在特定序号的池子生效(从第1个池子开始计数)",
     )
     banner_every_n = 0
+    banner_offset = 0
     if use_banner_index:
-        banner_every_n = st.number_input(
-            "每N个池子",
-            min_value=0,
-            value=2,
-            step=1,
-            key=f"{rule_prefix}banner_every_n",
-            help="0=每个池子, 2=第1,3,5...个池子, 3=第1,4,7...个池子",
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            banner_every_n = st.number_input(
+                "每N个池子",
+                min_value=0,
+                value=2,
+                step=1,
+                key=f"{rule_prefix}banner_every_n",
+                help="0=每个池子, 2=每2个池子中选1个",
+            )
+        with col2:
+            max_offset = max(0, banner_every_n - 1) if banner_every_n > 1 else 0
+            banner_offset = st.number_input(
+                "偏移量",
+                min_value=0,
+                max_value=max(1, max_offset),
+                value=0,
+                step=1,
+                key=f"{rule_prefix}banner_offset",
+                help="0=第1,3,5...个, 1=第2,4,6...个",
+            )
+
+    # Pity counter condition
+    use_pity_counter = st.checkbox(
+        "保底计数条件",
+        key=f"{rule_prefix}use_pity_counter",
+        help="距离上次出最高星级的抽数",
+    )
+    pity_counter_min = None
+    pity_counter_max = None
+    if use_pity_counter:
+        col1, col2 = st.columns(2)
+        with col1:
+            pity_counter_min = st.number_input(
+                "最小保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}pity_counter_min",
+            )
+            if pity_counter_min == 0:
+                pity_counter_min = None
+        with col2:
+            pity_counter_max = st.number_input(
+                "最大保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}pity_counter_max",
+                help="0表示不限制",
+            )
+            if pity_counter_max == 0:
+                pity_counter_max = None
 
     # === Action ===
     st.markdown("**动作**")
@@ -1062,15 +1218,26 @@ def _render_creation_rule_editor(prefix: str):
                 key=f"{rule_prefix}action_stop_on_hr",
             )
 
-        target_pot = st.number_input(
-            "目标潜能",
-            min_value=0,
-            max_value=6,
-            value=0,
-            step=1,
-            key=f"{rule_prefix}action_target_potential",
-            help="0表示不限制潜能",
-        )
+        col5, col6 = st.columns(2)
+        with col5:
+            target_pot = st.number_input(
+                "目标潜能",
+                min_value=0,
+                max_value=6,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}action_target_potential",
+                help="0表示不限制潜能",
+            )
+        with col6:
+            target_pity = st.number_input(
+                "目标保底计数",
+                min_value=0,
+                value=0,
+                step=1,
+                key=f"{rule_prefix}action_target_pity",
+                help="抽到此保底计数后停止(0=不限制)",
+            )
 
         action = ContinueAction(
             min_draws_per_banner=min_draws,
@@ -1078,6 +1245,7 @@ def _render_creation_rule_editor(prefix: str):
             stop_on_main=stop_on_main,
             stop_on_highest_rarity=stop_on_hr,
             target_potential=target_pot if target_pot > 0 else None,
+            target_pity=target_pity if target_pity > 0 else None,
         )
     elif action_type == "delegate":
         # Get all strategy names except the one being created
@@ -1126,7 +1294,18 @@ def _render_creation_rule_editor(prefix: str):
             if use_pity:
                 conditions.append(GotPityWithoutMainCondition(value=pity_value))
             if use_banner_index:
-                conditions.append(BannerIndexCondition(every_n=banner_every_n))
+                conditions.append(
+                    BannerIndexCondition(every_n=banner_every_n, offset=banner_offset)
+                )
+            if use_pity_counter and (
+                pity_counter_min is not None or pity_counter_max is not None
+            ):
+                conditions.append(
+                    PityCounterCondition(
+                        min_pity=pity_counter_min,
+                        max_pity=pity_counter_max,
+                    )
+                )
 
             # Create rule
             new_rule = StrategyRule(

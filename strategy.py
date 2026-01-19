@@ -48,6 +48,9 @@ class EvaluationContext(BaseModel):
         default=0, description="Current number of copies of main operator obtained"
     )
     banner_index: int = Field(default=0, description="Current banner index (0-based)")
+    pity_counter: int = Field(
+        default=0, description="Current pity counter (draws since last highest rarity)"
+    )
 
     model_config = {"frozen": True}
 
@@ -198,7 +201,7 @@ class GotPityWithoutMainCondition(BaseModel):
 
 
 class BannerIndexCondition(BaseModel):
-    """Condition based on banner index (every Nth banner, 1-based).
+    """Condition based on banner index (every Nth banner with offset).
 
     The banner_index in context is 0-based, but we use 1-based counting:
     - Banner 1 has index 0, Banner 2 has index 1, etc.
@@ -206,8 +209,11 @@ class BannerIndexCondition(BaseModel):
     Examples:
     - every_n=0: matches all banners (no filtering)
     - every_n=1: matches banner 1, 2, 3, ... (same as 0, every banner)
-    - every_n=2: matches banner 1, 3, 5, ... (every 2nd banner, starting from 1st)
-    - every_n=3: matches banner 1, 4, 7, ... (every 3rd banner, starting from 1st)
+    - every_n=2, offset=0: matches banner 1, 3, 5, ... (odd banners)
+    - every_n=2, offset=1: matches banner 2, 4, 6, ... (even banners)
+    - every_n=3, offset=0: matches banner 1, 4, 7, ...
+    - every_n=3, offset=1: matches banner 2, 5, 8, ...
+    - every_n=3, offset=2: matches banner 3, 6, 9, ...
     """
 
     type: Literal["banner_index"] = "banner_index"
@@ -216,16 +222,54 @@ class BannerIndexCondition(BaseModel):
         ge=0,
         description="Apply on every Nth banner (0 = every banner)",
     )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Offset within the cycle (0 = first in cycle, 1 = second, etc.)",
+    )
 
     def evaluate(self, context: EvaluationContext) -> bool:
         # 0 or 1 means every banner
         if self.every_n <= 1:
             return True
-        # Convert 0-based index to 1-based for modulo check
-        # Banner 1 (index 0) should match, banner 3 (index 2) should match for every_n=2
-        # (index + 1) % every_n == 1 means 1st, (every_n+1)th, etc.
-        # Simplified: index % every_n == 0 means banners 1, every_n+1, 2*every_n+1, ...
-        return context.banner_index % self.every_n == 0
+        # Check if banner index matches the pattern with offset
+        # index % every_n == offset means:
+        #   offset=0: banners 1, every_n+1, 2*every_n+1, ... (indices 0, every_n, 2*every_n)
+        #   offset=1: banners 2, every_n+2, 2*every_n+2, ... (indices 1, every_n+1, 2*every_n+1)
+        return context.banner_index % self.every_n == self.offset
+
+
+class PityCounterCondition(BaseModel):
+    """Condition based on current pity counter (draws since last highest rarity).
+
+    The pity counter tracks how many draws have been made since the last
+    highest rarity operator was obtained. This is useful for strategies
+    that want to stop at a certain pity level or continue until pity.
+
+    Examples:
+    - min_pity=60: matches when pity counter >= 60 (in soft pity range)
+    - max_pity=30: matches when pity counter <= 30 (early draws)
+    - min_pity=0, max_pity=0: matches when pity counter is exactly 0 (just got highest rarity)
+    """
+
+    type: Literal["pity_counter"] = "pity_counter"
+    min_pity: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Minimum pity counter (inclusive). None means no minimum.",
+    )
+    max_pity: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Maximum pity counter (inclusive). None means no maximum.",
+    )
+
+    def evaluate(self, context: EvaluationContext) -> bool:
+        if self.min_pity is not None and context.pity_counter < self.min_pity:
+            return False
+        if self.max_pity is not None and context.pity_counter > self.max_pity:
+            return False
+        return True
 
 
 # Union of all condition types using discriminated union
@@ -238,6 +282,7 @@ StrategyCondition = Annotated[
         ResourceThresholdCondition,
         GotPityWithoutMainCondition,
         BannerIndexCondition,
+        PityCounterCondition,
     ],
     Field(discriminator="type"),
 ]
@@ -278,6 +323,11 @@ class ContinueAction(BaseModel):
         default=None,
         ge=1,
         description="Target number of main operator copies to obtain. None = don't target potential.",
+    )
+    target_pity: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Target pity counter to reach before stopping. None = don't target pity.",
     )
 
 
@@ -475,6 +525,11 @@ class DrawStrategy(BaseModel):
                 if context.current_potential >= action.target_potential:
                     return False
 
+            # Check target_pity constraint (stop when reached target pity)
+            if action.target_pity is not None:
+                if context.pity_counter >= action.target_pity:
+                    return False
+
             # Check resource availability
             if context.normal_draws <= 0 and not behavior.pay:
                 # No draws available and can't pay
@@ -603,7 +658,16 @@ class DrawStrategy(BaseModel):
         elif isinstance(cond, BannerIndexCondition):
             if cond.every_n <= 1:
                 return "每个池子"
-            return f"每{cond.every_n}个池子"
+            if cond.offset == 0:
+                return f"每{cond.every_n}个池子的第1个"
+            return f"每{cond.every_n}个池子的第{cond.offset + 1}个"
+        elif isinstance(cond, PityCounterCondition):
+            parts = []
+            if cond.min_pity is not None:
+                parts.append(f"保底计数≥{cond.min_pity}")
+            if cond.max_pity is not None:
+                parts.append(f"保底计数≤{cond.max_pity}")
+            return " 且 ".join(parts) if parts else "任意保底计数"
         return str(cond)
 
     def _action_to_chinese(
@@ -628,6 +692,8 @@ class DrawStrategy(BaseModel):
                 parts.append("抽到最高星级后停止")
             if action.target_potential:
                 parts.append(f"目标{action.target_potential}潜能")
+            if action.target_pity:
+                parts.append(f"抽到{action.target_pity}保底计数")
             return "继续抽卡" + (f" ({', '.join(parts)})" if parts else "")
         elif isinstance(action, DelegateAction):
             desc = f"执行策略「{action.strategy_name}」"
