@@ -1000,7 +1000,10 @@ if st.session_state.run_results:
                 if op.first_draw_count > 0
                 else 0
             )
-            main_op_stats.append((main_name, expected_first))
+            acquisition_rate = (
+                (op.first_draw_count / num_exp * 100) if num_exp > 0 else 0
+            )
+            main_op_stats.append((main_name, expected_first, acquisition_rate))
 
     # Display summary stats prominently
     st.markdown(
@@ -1017,9 +1020,22 @@ if st.session_state.run_results:
     if main_op_stats:
         st.markdown("#### 🎯 主要干员首抽期望(非赠送抽使用)")
         cols = st.columns(len(main_op_stats))
-        for i, (name, expected) in enumerate(main_op_stats):
+        for i, (name, expected, acq_rate) in enumerate(main_op_stats):
             with cols[i]:
-                st.metric(name, f"{expected:.1f} 抽")
+                if acq_rate >= 99.5:
+                    # High acquisition rate, just show expected draws
+                    st.metric(name, f"{expected:.1f} 抽")
+                elif acq_rate > 0:
+                    # Show expected draws with acquisition rate
+                    st.metric(
+                        name,
+                        f"{expected:.1f} 抽",
+                        delta=f"获取率 {acq_rate:.1f}%",
+                        delta_color="off",
+                    )
+                else:
+                    # Never obtained
+                    st.metric(name, "未获取")
 
     # Display operators by rarity
     for rarity in [6, 5, 4]:
@@ -1045,6 +1061,10 @@ if st.session_state.run_results:
                     if op.first_draw_count > 0
                     else 0
                 )
+                # Acquisition rate: percentage of experiments where this operator was obtained
+                acquisition_rate = (
+                    (op.first_draw_count / num_exp * 100) if num_exp > 0 else 0
+                )
                 # Special draw ratio: how many of the total gains came from special draws
                 special_ratio = (
                     (op.drawn_by_special_count / op.potential * 100)
@@ -1056,6 +1076,7 @@ if st.session_state.run_results:
                     {
                         "干员": name,
                         "平均数量": f"{avg_potential:.2f}",
+                        "获取率": f"{acquisition_rate:.1f}%",
                         "首抽期望(非赠送抽)": f"{expected_first_draw:.1f}",
                         "特殊抽占比": f"{special_ratio:.1f}%",
                     }

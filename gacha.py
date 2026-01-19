@@ -515,29 +515,27 @@ class Run(BaseModel):
 
         # If we got the main operator, check min_draws_after_main rules
         if got_main:
-            target_draws = draws_accumulated  # default: no additional draws needed
+            # Default: continue to min_draws_per_banner
+            target_draws = strategy.min_draws_per_banner
             for threshold, target in strategy.min_draws_after_main:
                 if draws_accumulated >= threshold:
                     target_draws = max(target_draws, target)
 
             # If we've reached the target, stop drawing
             if draws_accumulated >= target_draws:
-                # Check if we've met minimum draws requirement
-                if draws_accumulated >= strategy.min_draws_per_banner:
-                    return 0
+                return 0
 
         # If we hit pity but missed the main operator, check min_draws_after_pity rules
         if got_pity_without_main and not got_main:
-            target_draws = draws_accumulated  # default: no additional draws needed
+            # Default: continue to min_draws_per_banner
+            target_draws = strategy.min_draws_per_banner
             for threshold, target in strategy.min_draws_after_pity:
                 if draws_accumulated >= threshold:
                     target_draws = max(target_draws, target)
 
             # If we've reached the target, stop drawing
             if draws_accumulated >= target_draws:
-                # Check if we've met minimum draws requirement
-                if draws_accumulated >= strategy.min_draws_per_banner:
-                    return 0
+                return 0
 
         # Check if we have draws available (or can pay)
         if current_available <= 0 and not strategy.pay:
