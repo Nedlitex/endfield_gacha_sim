@@ -6,7 +6,8 @@ import zlib
 import pandas as pd
 import streamlit as st
 
-from gacha import Banner, Config, DrawStrategy, Operator, Player, Run
+from banner import Banner, Operator
+from gacha import Config, DrawStrategy, Player, Run
 
 st.set_page_config(page_title="终末地抽卡策略模拟器", layout="wide")
 
