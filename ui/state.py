@@ -47,6 +47,10 @@ def serialize_state() -> str:
             "banner_names": results["banner_names"],
             "auto_banner_count": results.get("auto_banner_count", 0),
             "main_operators": results.get("main_operators", []),
+            "total_main_copies": results.get("total_main_copies", 0),
+            "total_highest_rarity_not_main": results.get(
+                "total_highest_rarity_not_main", 0
+            ),
         }
 
     # Serialize trial draw banner instances
@@ -227,6 +231,10 @@ def initialize_session_state():
                         "banner_names": quick_data["banner_names"],
                         "auto_banner_count": quick_data.get("auto_banner_count", 0),
                         "main_operators": quick_data.get("main_operators", []),
+                        "total_main_copies": quick_data.get("total_main_copies", 0),
+                        "total_highest_rarity_not_main": quick_data.get(
+                            "total_highest_rarity_not_main", 0
+                        ),
                     }
                 else:
                     st.session_state.quick_sim_results = None
