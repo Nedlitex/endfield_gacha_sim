@@ -47,6 +47,9 @@ def _on_config_change():
     st.session_state.config.draws_gain_per_banner = (
         st.session_state.config_draws_per_banner
     )
+    st.session_state.config.draws_gain_per_banner_start_at = (
+        st.session_state.config_draws_per_banner_start_at
+    )
     st.session_state.config.draws_gain_this_banner = (
         st.session_state.config_draws_this_banner
     )
@@ -190,6 +193,516 @@ def _render_quick_simulation_section():
         if st.session_state.quick_sim_results:
             _render_quick_simulation_results()
 
+        # Trial draw section
+        st.markdown("---")
+        _render_trial_draw_section()
+
+
+def _render_trial_draw_section():
+    """Render the trial draw section with 1-draw and 10-draw buttons."""
+    st.markdown("**试抽**")
+    st.caption("选择一个卡池进行试抽，结果会累积显示（切换卡池不会重置）")
+
+    if not st.session_state.banners:
+        st.info("请先创建卡池")
+        return
+
+    # Initialize trial draw state
+    if "trial_draw_results" not in st.session_state:
+        st.session_state.trial_draw_results = []
+    if "trial_draw_banner_idx" not in st.session_state:
+        st.session_state.trial_draw_banner_idx = 0
+    if "trial_draw_banner_instances" not in st.session_state:
+        st.session_state.trial_draw_banner_instances = {}
+    if "trial_draw_special_draws" not in st.session_state:
+        st.session_state.trial_draw_special_draws = {}  # Per-banner special draws
+    if "trial_draw_inherited_draws" not in st.session_state:
+        st.session_state.trial_draw_inherited_draws = (
+            {}
+        )  # Per-banner inherited draws (from previous banner)
+
+    # Get current banner index and name
+    banner_names = [b.name for b in st.session_state.banners]
+    current_idx = st.session_state.trial_draw_banner_idx
+
+    # Build current banner name - could be from banners list or auto-generated
+    if current_idx < len(banner_names):
+        current_banner_name = banner_names[current_idx]
+    else:
+        # Auto-generated banner name
+        auto_idx = current_idx - len(banner_names) + 1
+        current_banner_name = f"自动池{auto_idx}"
+
+    # Initialize pending inherited draws
+    if "trial_draw_pending_inherited" not in st.session_state:
+        st.session_state.trial_draw_pending_inherited = 0
+
+    # Get or create banner instance for the current banner
+    if current_banner_name not in st.session_state.trial_draw_banner_instances:
+        if current_idx < len(banner_names):
+            # Use existing banner as source
+            source_banner = st.session_state.banners[current_idx]
+            st.session_state.trial_draw_banner_instances[current_banner_name] = (
+                source_banner.model_copy(deep=True)
+            )
+        else:
+            # Auto-generate a new banner using the first banner's template
+            from banner import create_next_banner
+            from ui.defaults import create_default_operators
+
+            template = (
+                st.session_state.banners[0].template
+                if st.session_state.banners
+                else st.session_state.banner_templates[0]
+            )
+            # Get previous banners for inheritance
+            previous_banners = list(
+                st.session_state.trial_draw_banner_instances.values()
+            )
+            auto_banner = create_next_banner(
+                template=template.model_copy(deep=True),
+                default_operators=create_default_operators(),
+                previous_banners=previous_banners,
+                banner_name=current_banner_name,
+            )
+            st.session_state.trial_draw_banner_instances[current_banner_name] = (
+                auto_banner
+            )
+
+    trial_banner = st.session_state.trial_draw_banner_instances[current_banner_name]
+
+    # Display current banner info with operators
+    st.markdown(f"**当前卡池:** {current_banner_name} (第 {current_idx + 1} 期)")
+    with st.container(border=True):
+        # Display operators by rarity
+        for rarity in sorted(trial_banner.operators.keys(), reverse=True):
+            if trial_banner.operators[rarity]:
+                color = RARITY_COLORS.get(rarity, "#ffffff")
+                op_names = []
+                for op in trial_banner.operators[rarity]:
+                    if (
+                        trial_banner.main_operator
+                        and op.name == trial_banner.main_operator.name
+                    ):
+                        op_names.append(f"**{op.name}(UP)**")
+                    else:
+                        op_names.append(op.name)
+                names_str = ", ".join(op_names)
+                st.markdown(
+                    f"<span style='color:{color}'><b>{rarity}星:</b> {names_str}</span>",
+                    unsafe_allow_html=True,
+                )
+
+    # Get special draws available for this banner
+    special_draws_available = st.session_state.trial_draw_special_draws.get(
+        current_banner_name, 0
+    )
+    has_special_draws = special_draws_available > 0
+
+    # Get inherited draws available for this banner
+    inherited_draws_available = st.session_state.trial_draw_inherited_draws.get(
+        current_banner_name, 0
+    )
+    has_inherited_draws = inherited_draws_available > 0
+
+    # Draw buttons - priority: special draws > inherited draws > normal draws
+    with st_horizontal():
+        if has_special_draws:
+            # Special draw mode: disable single draw, show special 10-draw
+            st.button("单抽", key="trial_draw_1", disabled=True)
+            if st.button("🎫 特殊十连", key="trial_draw_10"):
+                _do_trial_draw(
+                    trial_banner, 10, current_banner_name, is_special_draw=True
+                )
+                # Consume special draws
+                st.session_state.trial_draw_special_draws[current_banner_name] = max(
+                    0, special_draws_available - 10
+                )
+                # Jump to last page to show newest results
+                st.session_state.trial_draw_page = 999999
+                st.rerun()
+        elif has_inherited_draws:
+            # Inherited draw mode: disable single draw, show inherited 10-draw
+            st.button("单抽", key="trial_draw_1", disabled=True)
+            if st.button("🎟️ 继承十连", key="trial_draw_10"):
+                _do_trial_draw(
+                    trial_banner, 10, current_banner_name, is_inherited_draw=True
+                )
+                # Consume inherited draws
+                st.session_state.trial_draw_inherited_draws[current_banner_name] = max(
+                    0, inherited_draws_available - 10
+                )
+                # Jump to last page to show newest results
+                st.session_state.trial_draw_page = 999999
+                st.rerun()
+        else:
+            # Normal draw mode
+            if st.button("单抽", key="trial_draw_1"):
+                _do_trial_draw(trial_banner, 1, current_banner_name)
+                # Jump to last page to show newest results
+                st.session_state.trial_draw_page = 999999
+                st.rerun()
+            if st.button("十连", key="trial_draw_10"):
+                _do_trial_draw(trial_banner, 10, current_banner_name)
+                # Jump to last page to show newest results
+                st.session_state.trial_draw_page = 999999
+                st.rerun()
+        # Next banner button - only enabled when no special draws pending
+        # Inherited draws don't block moving to next banner (they transfer or are lost)
+        can_go_next = not has_special_draws
+        if st.button("下一期", key="trial_draw_next_banner", disabled=not can_go_next):
+            # When moving to next banner:
+            # 1. Any unused inherited draws on current banner are lost (cleared)
+            # 2. Pending inherited draws (earned this banner) are assigned to the new banner
+
+            # Clear unused inherited draws on current banner (they are lost)
+            if current_banner_name in st.session_state.trial_draw_inherited_draws:
+                del st.session_state.trial_draw_inherited_draws[current_banner_name]
+
+            # Move to next banner
+            st.session_state.trial_draw_banner_idx += 1
+            new_idx = st.session_state.trial_draw_banner_idx
+
+            # Build new banner name
+            if new_idx < len(banner_names):
+                new_banner_name = banner_names[new_idx]
+            else:
+                auto_idx = new_idx - len(banner_names) + 1
+                new_banner_name = f"自动池{auto_idx}"
+
+            # Assign pending inherited draws to the new banner
+            pending = st.session_state.get("trial_draw_pending_inherited", 0)
+            if pending > 0:
+                st.session_state.trial_draw_inherited_draws[new_banner_name] = pending
+                st.session_state.trial_draw_pending_inherited = 0
+
+            st.rerun()
+        if st.button("清空结果", key="trial_draw_clear"):
+            st.session_state.trial_draw_results = []
+            # Reset all banner instances
+            st.session_state.trial_draw_banner_instances = {}
+            # Reset special draws
+            st.session_state.trial_draw_special_draws = {}
+            # Reset inherited draws
+            st.session_state.trial_draw_inherited_draws = {}
+            # Reset pending inherited draws
+            st.session_state.trial_draw_pending_inherited = 0
+            # Reset banner index
+            st.session_state.trial_draw_banner_idx = 0
+            # Reset pagination
+            st.session_state.trial_draw_page = 1
+            st.rerun()
+
+    # Show info about available draws (after buttons so they don't move)
+    info_parts = []
+    if has_special_draws:
+        info_parts.append(f"🎫 特殊抽 **{special_draws_available}** 次")
+    if has_inherited_draws:
+        info_parts.append(f"🎟️ 继承抽 **{inherited_draws_available}** 次")
+    if info_parts:
+        st.info(" | ".join(info_parts))
+
+    # Show pending inherited draws (will be available on next banner)
+    pending_inherited = st.session_state.get("trial_draw_pending_inherited", 0)
+    if pending_inherited > 0:
+        st.caption(
+            f"🎟️ 待继承 {pending_inherited} 次（切换到下一期后可用，不切换则作废）"
+        )
+
+    # Display trial draw results
+    if st.session_state.trial_draw_results:
+        _render_trial_draw_results()
+
+
+def _do_trial_draw(
+    banner,
+    count: int,
+    banner_name: str,
+    is_special_draw: bool = False,
+    is_inherited_draw: bool = False,
+):
+    """Perform trial draws and store results."""
+    current_total = len(st.session_state.trial_draw_results)
+
+    for i in range(count):
+        draw_num = current_total + i + 1
+        result = banner.draw(is_special_draw=is_special_draw)
+        op = result.reward.operators[0]
+        highest_rarity = max(banner.template.rarities)
+
+        # Build result entry with more details
+        entry = {
+            "draw_num": draw_num,
+            "operator": op.name,
+            "rarity": op.rarity,
+            "is_main": banner.main_operator and op.name == banner.main_operator.name,
+            "is_highest_rarity": op.rarity == highest_rarity,
+            "got_main": result.got_main,
+            "triggered_pity": result.triggered_pity,
+            "triggered_definitive": result.triggered_definitive,
+            "potential_reward": result.reward.potential,
+            "main_operator_name": (
+                banner.main_operator.name if banner.main_operator else None
+            ),
+            "special_draws_reward": result.reward.special_draws,
+            "next_banner_draws_reward": result.reward.next_banner_draws,
+            "banner_name": banner_name,
+            "is_special_draw": is_special_draw,
+            "is_inherited_draw": is_inherited_draw,
+        }
+        st.session_state.trial_draw_results.append(entry)
+
+        # Add special draws reward to the banner's special draw pool
+        if result.reward.special_draws > 0:
+            current_special = st.session_state.trial_draw_special_draws.get(
+                banner_name, 0
+            )
+            st.session_state.trial_draw_special_draws[banner_name] = (
+                current_special + result.reward.special_draws
+            )
+
+        # Add next banner draws reward - need to determine which banner gets them
+        # For now, store them generically and user picks which banner when switching
+        if result.reward.next_banner_draws > 0:
+            # Store as pending inherited draws (will be assigned when user switches banner)
+            if "trial_draw_pending_inherited" not in st.session_state:
+                st.session_state.trial_draw_pending_inherited = 0
+            st.session_state.trial_draw_pending_inherited += (
+                result.reward.next_banner_draws
+            )
+
+
+def _render_trial_draw_results():
+    """Render the trial draw results with detailed statistics and pagination."""
+    results = st.session_state.trial_draw_results
+    total_draws = len(results)
+
+    if total_draws == 0:
+        return
+
+    # Calculate detailed statistics
+    rarity_counts: dict[int, int] = {}
+    main_count = 0
+    highest_rarity_count = 0
+    highest_rarity_operators: dict[str, int] = (
+        {}
+    )  # Track highest rarity operators with counts
+    pity_count = 0
+    definitive_count = 0
+    total_potential = 0
+    total_special_draws_earned = 0
+    special_draws_used = 0
+    total_inherited_draws_earned = 0
+    inherited_draws_used = 0
+
+    for r in results:
+        rarity = r["rarity"]
+        rarity_counts[rarity] = rarity_counts.get(rarity, 0) + 1
+        if r.get("is_main"):
+            main_count += 1
+        if r.get("is_highest_rarity"):
+            highest_rarity_count += 1
+            op_name = r["operator"]
+            highest_rarity_operators[op_name] = (
+                highest_rarity_operators.get(op_name, 0) + 1
+            )
+        # Count potential rewards as additional copies of the main operator
+        potential_reward = r.get("potential_reward", 0)
+        if potential_reward > 0:
+            main_op_name = r.get("main_operator_name")
+            if main_op_name:
+                highest_rarity_operators[main_op_name] = (
+                    highest_rarity_operators.get(main_op_name, 0) + potential_reward
+                )
+        if r.get("triggered_pity"):
+            pity_count += 1
+        if r.get("triggered_definitive"):
+            definitive_count += 1
+        total_potential += r.get("potential_reward", 0)
+        total_special_draws_earned += r.get("special_draws_reward", 0)
+        if r.get("is_special_draw"):
+            special_draws_used += 1
+        total_inherited_draws_earned += r.get("next_banner_draws_reward", 0)
+        if r.get("is_inherited_draw"):
+            inherited_draws_used += 1
+
+    # Calculate remaining special draws across all banners
+    remaining_special_draws = sum(st.session_state.trial_draw_special_draws.values())
+
+    # Calculate paid draws (not special or inherited)
+    paid_draws = total_draws - special_draws_used - inherited_draws_used
+
+    # Display highest rarity operators as a horizontal list first
+    st.markdown("**统计**")
+    if highest_rarity_operators:
+        highest_rarity = max(rarity_counts.keys())
+        color = RARITY_COLORS.get(highest_rarity, "#ffffff")
+        # Sort by count (descending), then by name
+        sorted_ops = sorted(
+            highest_rarity_operators.items(), key=lambda x: (-x[1], x[0])
+        )
+        op_parts = []
+        for op_name, count in sorted_ops:
+            op_parts.append(f"<span style='color:{color}'>{op_name} ×{count}</span>")
+        st.markdown(
+            f"**{highest_rarity}星:** " + " | ".join(op_parts), unsafe_allow_html=True
+        )
+
+    # Display summary statistics
+    summary_parts = [f"共 **{total_draws}** 抽 (氪金{paid_draws})"]
+    for rarity in sorted(rarity_counts.keys(), reverse=True):
+        color = RARITY_COLORS.get(rarity, "#ffffff")
+        summary_parts.append(
+            f"<span style='color:{color}'>{rarity}星×{rarity_counts[rarity]}</span>"
+        )
+
+    st.markdown(" | ".join(summary_parts), unsafe_allow_html=True)
+
+    # Detailed stats row (no UP count since it changes across banners)
+    detail_parts = []
+    if pity_count > 0:
+        detail_parts.append(f"🔸 小保底×{pity_count}")
+    if definitive_count > 0:
+        detail_parts.append(f"🔶 大保底×{definitive_count}")
+    if total_potential > 0:
+        detail_parts.append(f"💎 潜能+{total_potential}")
+    if total_special_draws_earned > 0:
+        detail_parts.append(f"🎫 特殊抽+{total_special_draws_earned}")
+    if special_draws_used > 0:
+        detail_parts.append(f"🎫 特殊抽-{special_draws_used}")
+    if remaining_special_draws > 0:
+        detail_parts.append(
+            f"<span style='color:#66ccff'>🎫 剩余{remaining_special_draws}</span>"
+        )
+    if total_inherited_draws_earned > 0:
+        detail_parts.append(f"🎟️ 继承抽+{total_inherited_draws_earned}")
+    if inherited_draws_used > 0:
+        detail_parts.append(f"🎟️ 继承抽-{inherited_draws_used}")
+    # Calculate remaining inherited draws
+    remaining_inherited_draws = sum(
+        st.session_state.trial_draw_inherited_draws.values()
+    ) + st.session_state.get("trial_draw_pending_inherited", 0)
+    if remaining_inherited_draws > 0:
+        detail_parts.append(
+            f"<span style='color:#66ff66'>🎟️ 剩余{remaining_inherited_draws}</span>"
+        )
+
+    if detail_parts:
+        st.markdown(" | ".join(detail_parts), unsafe_allow_html=True)
+
+    # Pagination
+    ITEMS_PER_PAGE = 30
+    total_pages = (total_draws + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+
+    if "trial_draw_page" not in st.session_state:
+        st.session_state.trial_draw_page = total_pages  # Start at last page (newest)
+
+    # Ensure page is valid
+    if st.session_state.trial_draw_page > total_pages:
+        st.session_state.trial_draw_page = total_pages
+    if st.session_state.trial_draw_page < 1:
+        st.session_state.trial_draw_page = 1
+
+    current_page = st.session_state.trial_draw_page
+
+    # Pagination controls
+    if total_pages > 1:
+        with st_horizontal():
+            if st.button("⏮️ 首页", key="trial_page_first", disabled=current_page == 1):
+                st.session_state.trial_draw_page = 1
+                st.rerun()
+            if st.button("◀️ 上页", key="trial_page_prev", disabled=current_page == 1):
+                st.session_state.trial_draw_page = current_page - 1
+                st.rerun()
+            st.markdown(
+                f"<span style='padding: 0 10px;'>第 {current_page}/{total_pages} 页</span>",
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "▶️ 下页", key="trial_page_next", disabled=current_page == total_pages
+            ):
+                st.session_state.trial_draw_page = current_page + 1
+                st.rerun()
+            if st.button(
+                "⏭️ 末页", key="trial_page_last", disabled=current_page == total_pages
+            ):
+                st.session_state.trial_draw_page = total_pages
+                st.rerun()
+
+    # Get items for current page
+    start_idx = (current_page - 1) * ITEMS_PER_PAGE
+    end_idx = min(start_idx + ITEMS_PER_PAGE, total_draws)
+    page_results = results[start_idx:end_idx]
+
+    # Display individual results
+    result_lines = []
+    for r in page_results:
+        color = RARITY_COLORS.get(r["rarity"], "#ffffff")
+        name = r["operator"]
+
+        # Build the display line
+        line_parts = []
+
+        # Draw number
+        line_parts.append(f"#{r['draw_num']}")
+
+        # Banner name
+        if r.get("banner_name"):
+            line_parts.append(f"[{r['banner_name']}]")
+
+        # Special/Inherited draw indicator
+        is_special = r.get("is_special_draw", False)
+        is_inherited = r.get("is_inherited_draw", False)
+        if is_special:
+            draw_prefix = "<span style='color:#66ccff'>🎫</span> "
+        elif is_inherited:
+            draw_prefix = "<span style='color:#66ff66'>🎟️</span> "
+        else:
+            draw_prefix = ""
+
+        # Operator name with UP highlight
+        if r.get("is_main"):
+            name_display = f"{draw_prefix}<span style='color:#ff4b4b; font-weight:bold; font-size:1.1em'>🎯 {name} (UP)</span>"
+        else:
+            name_display = f"{draw_prefix}<span style='color:{color}'>{name}</span>"
+        line_parts.append(name_display)
+
+        # Tags for special events
+        tags = []
+        if r.get("triggered_definitive"):
+            tags.append("<span style='color:#ffd700'>🔶大保底</span>")
+        elif r.get("triggered_pity"):
+            tags.append("<span style='color:#ffa500'>🔸小保底</span>")
+        # Potential reward - show which UP operator gets it
+        if r.get("potential_reward", 0) > 0:
+            main_op = r.get("main_operator_name", "UP")
+            tags.append(
+                f"<span style='color:#9966ff'>{main_op} 💎+{r['potential_reward']}</span>"
+            )
+        # Show +10 for draws that earned special draws
+        if r.get("special_draws_reward", 0) > 0:
+            tags.append(
+                f"<span style='color:#66ccff'>🎫+{r['special_draws_reward']}</span>"
+            )
+        # Show -1 for draws that consumed special draws
+        if r.get("is_special_draw"):
+            tags.append("<span style='color:#66ccff'>🎫-1</span>")
+        # Show +N for draws that earned inherited draws
+        if r.get("next_banner_draws_reward", 0) > 0:
+            tags.append(
+                f"<span style='color:#66ff66'>🎟️+{r['next_banner_draws_reward']}</span>"
+            )
+        # Show -1 for draws that consumed inherited draws
+        if r.get("is_inherited_draw"):
+            tags.append("<span style='color:#66ff66'>🎟️-1</span>")
+
+        if tags:
+            line_parts.append(" ".join(tags))
+
+        result_lines.append(" ".join(line_parts))
+
+    st.markdown("<br>".join(result_lines), unsafe_allow_html=True)
+
 
 def _execute_quick_simulation(
     banner_name_list: list[str],
@@ -280,6 +793,8 @@ def _execute_quick_simulation(
         "player": result_player,
         "paid_draws": run.paid_draws,
         "total_draws": run.total_draws,
+        "total_main_copies": run.total_main_copies,
+        "total_highest_rarity_not_main": run.total_highest_rarity_not_main,
         "num_experiments": num_experiments,
         "num_banners": total_banners,
         "banner_names": banner_name_list,
@@ -345,14 +860,14 @@ def _render_simulation_results_shared(
     avg_paid_per_run = results["paid_draws"] / num_exp if num_exp > 0 else 0
     avg_paid_per_banner = avg_paid_per_run / num_banners if num_banners > 0 else 0
 
-    # Calculate average unique UPs obtained per run
+    # Calculate average UP copies obtained per run (total copies, not unique)
     main_ops = results.get("main_operators", [])
-    total_up_acquisitions = 0
-    for main_name in main_ops:
-        if 6 in player.operators and main_name in player.operators[6]:
-            op = player.operators[6][main_name]
-            total_up_acquisitions += op.first_draw_count
-    avg_unique_ups = total_up_acquisitions / num_exp if num_exp > 0 else 0
+    total_main_copies = results.get("total_main_copies", 0)
+    avg_main_copies = total_main_copies / num_exp if num_exp > 0 else 0
+
+    # Calculate average "歪" (highest rarity but not main) per run
+    total_wai = results.get("total_highest_rarity_not_main", 0)
+    avg_wai = total_wai / num_exp if num_exp > 0 else 0
 
     # Calculate main operator first draw expectations
     main_op_stats = []
@@ -375,15 +890,24 @@ def _render_simulation_results_shared(
     # Different metric display based on simulation type
     if is_quick_sim:
         # Quick sim: all draws are paid, so just show paid draws
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("每池平均氪金抽数", f"{avg_paid_per_banner:.1f}")
         with col2:
-            if len(main_ops) > 0:
-                st.metric("平均获得UP数", f"{avg_unique_ups:.2f} / {len(main_ops)}")
+            st.metric(
+                "平均获得UP数",
+                f"{avg_main_copies:.2f} / {num_banners}",
+                help="每次模拟平均获得的UP干员数量",
+            )
+        with col3:
+            st.metric(
+                "平均歪数",
+                f"{avg_wai:.2f}",
+                help="每次模拟平均出最高星但非UP的次数",
+            )
     else:
         # Advanced sim: show both total and paid draws
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric(
                 "每池平均总抽数",
@@ -397,8 +921,17 @@ def _render_simulation_results_shared(
                 help="额外氪金购买的抽数",
             )
         with col3:
-            if len(main_ops) > 0:
-                st.metric("平均获得UP数", f"{avg_unique_ups:.2f} / {len(main_ops)}")
+            st.metric(
+                "平均获得UP数",
+                f"{avg_main_copies:.2f} / {num_banners}",
+                help="每次模拟平均获得的UP干员数量",
+            )
+        with col4:
+            st.metric(
+                "平均歪数",
+                f"{avg_wai:.2f}",
+                help="每次模拟平均出最高星但非UP的次数",
+            )
 
     # Display main operator stats prominently
     if main_op_stats:
@@ -437,7 +970,7 @@ def _render_resource_config():
     """Render the resource configuration section."""
     st.subheader("资源配置")
     with st.container(border=True):
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.number_input(
                 "初始抽数",
@@ -458,6 +991,16 @@ def _render_resource_config():
                 help="每期卡池获得的抽数，可以结转到下一期",
             )
         with col3:
+            st.number_input(
+                "从第N期开始",
+                min_value=1,
+                value=st.session_state.config.draws_gain_per_banner_start_at,
+                step=1,
+                key="config_draws_per_banner_start_at",
+                on_change=_on_config_change,
+                help="每期卡池获得抽数从第几期开始生效（跳过前N-1期）",
+            )
+        with col4:
             st.number_input(
                 "每期限定抽数",
                 min_value=0,
@@ -703,12 +1246,14 @@ def _render_run_confirmation_dialog(num_experiments: int, auto_config: dict):
         st.markdown("---")
         st.markdown("### 资源配置")
         config = st.session_state.config
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("初始抽数", config.initial_draws)
         with col2:
             st.metric("每期获得抽数", config.draws_gain_per_banner)
         with col3:
+            st.metric("从第N期开始", config.draws_gain_per_banner_start_at)
+        with col4:
             st.metric("每期限定抽数", config.draws_gain_this_banner)
 
         # Build list of enabled banners and their strategies
@@ -877,6 +1422,8 @@ def _execute_simulation(num_experiments: int, auto_config: dict):
             "player": result_player,
             "paid_draws": run.paid_draws,
             "total_draws": run.total_draws,
+            "total_main_copies": run.total_main_copies,
+            "total_highest_rarity_not_main": run.total_highest_rarity_not_main,
             "num_experiments": num_experiments,
             "banners": banner_names,
             "main_operators": main_operators,

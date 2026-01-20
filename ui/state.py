@@ -49,6 +49,11 @@ def serialize_state() -> str:
             "main_operators": results.get("main_operators", []),
         }
 
+    # Serialize trial draw banner instances
+    trial_draw_banner_instances_data = {}
+    for name, banner in st.session_state.get("trial_draw_banner_instances", {}).items():
+        trial_draw_banner_instances_data[name] = banner.model_dump()
+
     state = {
         "operators": [op.model_dump() for op in st.session_state.operators],
         "banners": [banner.model_dump() for banner in st.session_state.banners],
@@ -77,6 +82,20 @@ def serialize_state() -> str:
         "quick_sim_experiments": st.session_state.get("quick_sim_experiments", 1000),
         "quick_sim_single_draw": st.session_state.get("quick_sim_single_draw", False),
         "quick_sim_results": quick_sim_results_data,
+        # Trial draw state
+        "trial_draw_results": st.session_state.get("trial_draw_results", []),
+        "trial_draw_banner_idx": st.session_state.get("trial_draw_banner_idx", 0),
+        "trial_draw_banner_instances": trial_draw_banner_instances_data,
+        "trial_draw_special_draws": st.session_state.get(
+            "trial_draw_special_draws", {}
+        ),
+        "trial_draw_inherited_draws": st.session_state.get(
+            "trial_draw_inherited_draws", {}
+        ),
+        "trial_draw_pending_inherited": st.session_state.get(
+            "trial_draw_pending_inherited", 0
+        ),
+        "trial_draw_page": st.session_state.get("trial_draw_page", 1),
     }
     json_str = json.dumps(state, ensure_ascii=False)
     compressed = zlib.compress(json_str.encode(), level=9)
@@ -211,6 +230,28 @@ def initialize_session_state():
                     }
                 else:
                     st.session_state.quick_sim_results = None
+                # Load trial draw state
+                st.session_state.trial_draw_results = state.get(
+                    "trial_draw_results", []
+                )
+                st.session_state.trial_draw_banner_idx = state.get(
+                    "trial_draw_banner_idx", 0
+                )
+                # Load trial draw banner instances
+                trial_instances_data = state.get("trial_draw_banner_instances", {})
+                st.session_state.trial_draw_banner_instances = {
+                    name: Banner(**data) for name, data in trial_instances_data.items()
+                }
+                st.session_state.trial_draw_special_draws = state.get(
+                    "trial_draw_special_draws", {}
+                )
+                st.session_state.trial_draw_inherited_draws = state.get(
+                    "trial_draw_inherited_draws", {}
+                )
+                st.session_state.trial_draw_pending_inherited = state.get(
+                    "trial_draw_pending_inherited", 0
+                )
+                st.session_state.trial_draw_page = state.get("trial_draw_page", 1)
             except Exception:
                 _initialize_defaults()
         else:
@@ -238,3 +279,11 @@ def _initialize_defaults():
     st.session_state.quick_sim_experiments = 1000
     st.session_state.quick_sim_single_draw = False
     st.session_state.quick_sim_results = None
+    # Trial draw defaults
+    st.session_state.trial_draw_results = []
+    st.session_state.trial_draw_banner_idx = 0
+    st.session_state.trial_draw_banner_instances = {}
+    st.session_state.trial_draw_special_draws = {}
+    st.session_state.trial_draw_inherited_draws = {}
+    st.session_state.trial_draw_pending_inherited = 0
+    st.session_state.trial_draw_page = 1

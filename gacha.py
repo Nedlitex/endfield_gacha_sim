@@ -304,6 +304,10 @@ class Config(BaseModel):
         default=0,
         description="Number of draws player get per each banner (carries over)",
     )
+    draws_gain_per_banner_start_at: int = Field(
+        default=1,
+        description="Banner index (1-based) from which draws_gain_per_banner starts applying",
+    )
     draws_gain_this_banner: int = Field(
         default=0,
         description="Number of draws gained per banner that can only be used on that banner (does not carry over)",
@@ -319,6 +323,8 @@ class Run(BaseModel):
     Attributes:
         paid_draws: Total number of paid pulls across all simulation runs.
         total_draws: Total number of all draws (paid + free) across all runs.
+        total_main_copies: Total main operator copies obtained across all runs.
+        total_highest_rarity_not_main: Total times highest rarity was obtained but not main (歪).
         config: Economy configuration for draws available.
         banner_strategies: Per-banner strategy overrides, keyed by banner name.
         banners: List of banners to simulate drawing on, in order.
@@ -333,6 +339,13 @@ class Run(BaseModel):
     )
     total_draws: int = Field(
         default=0, description="Total number of all draws in this run"
+    )
+    total_main_copies: int = Field(
+        default=0, description="Total main operator copies obtained across all runs"
+    )
+    total_highest_rarity_not_main: int = Field(
+        default=0,
+        description="Total times highest rarity was obtained but not main (歪)",
     )
     config: Optional[Config] = Field(
         default=None, description="Default run configuration"
@@ -563,6 +576,8 @@ class Run(BaseModel):
         # Reset counters at the start of simulation
         self.paid_draws = 0
         self.total_draws = 0
+        self.total_main_copies = 0
+        self.total_highest_rarity_not_main = 0
         repeat_count = self.repeat
         repeat_remaining = repeat_count
 
@@ -630,7 +645,9 @@ class Run(BaseModel):
                 # Add per-banner draw gains
                 if self.config:
                     # draws_gain_per_banner goes to normal_draws (carries over)
-                    resource.add_normal_draws(self.config.draws_gain_per_banner)
+                    # Only apply if banner_index >= start_at (1-based)
+                    if banner_index + 1 >= self.config.draws_gain_per_banner_start_at:
+                        resource.add_normal_draws(self.config.draws_gain_per_banner)
                     # draws_gain_this_banner goes to current_banner_draws (doesn't carry over)
                     resource.add_current_banner_draws(
                         self.config.draws_gain_this_banner
@@ -794,6 +811,11 @@ class Run(BaseModel):
 
                 # Track total draws for this banner
                 self.total_draws += banner.draws_accumulated_total
+
+                # Track main copies and highest rarity not main (歪) for this banner
+                self.total_main_copies += current_potential
+                if got_highest_rarity_but_not_main:
+                    self.total_highest_rarity_not_main += 1
 
                 # Prepare resource for next banner:
                 # - normal_draws carry over

@@ -528,6 +528,10 @@ class DrawResult(BaseModel):
     triggered_pity: bool = Field(
         default=False, description="Whether this draw triggered the pity guarantee"
     )
+    triggered_definitive: bool = Field(
+        default=False,
+        description="Whether this draw triggered the definitive guarantee",
+    )
 
 
 class DrawRarityDistribution(BaseModel):
@@ -1001,4 +1005,5 @@ class Banner(BaseModel):
             ),
             got_main=self.got_main,
             triggered_pity=triggered_pity,
+            triggered_definitive=bool(is_definitive_draw),
         )
