@@ -8,6 +8,7 @@ import streamlit as st
 from banner import Banner, RewardType
 from gacha import Config, Run
 from strategy import ContinueAction, DrawBehavior, DrawStrategy
+from ui.components.config_section import render_config_section
 from ui.components.st_horizontal import st_horizontal
 from ui.components.strategy_section import render_strategy_section
 from ui.constants import RARITY_COLORS
@@ -38,21 +39,6 @@ def _on_auto_banner_config_change():
 
 def _on_num_experiments_change():
     """Callback when number of experiments changes."""
-    update_url()
-
-
-def _on_config_change():
-    """Callback when config values change."""
-    st.session_state.config.initial_draws = st.session_state.config_initial_draws
-    st.session_state.config.draws_gain_per_banner = (
-        st.session_state.config_draws_per_banner
-    )
-    st.session_state.config.draws_gain_per_banner_start_at = (
-        st.session_state.config_draws_per_banner_start_at
-    )
-    st.session_state.config.draws_gain_this_banner = (
-        st.session_state.config_draws_this_banner
-    )
     update_url()
 
 
@@ -802,7 +788,9 @@ def _execute_quick_simulation(
     auto_banner_template_copy = None
     auto_banner_default_operators = []
     if auto_banner_count > 0 and auto_banner_template:
-        auto_banner_template_copy = auto_banner_template.model_copy(deep=True)
+        from banner import BannerTemplate
+
+        auto_banner_template_copy = BannerTemplate(**auto_banner_template.model_dump())
         auto_banner_default_operators = create_default_operators()
 
     run = Run(
@@ -1011,52 +999,6 @@ def _render_simulation_results_shared(
         st.rerun()
 
 
-def _render_resource_config():
-    """Render the resource configuration section."""
-    st.subheader("资源配置")
-    with st.container(border=True):
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.number_input(
-                "初始抽数",
-                min_value=0,
-                value=st.session_state.config.initial_draws,
-                step=1,
-                key="config_initial_draws",
-                on_change=_on_config_change,
-            )
-        with col2:
-            st.number_input(
-                "每期卡池获得抽数",
-                min_value=0,
-                value=st.session_state.config.draws_gain_per_banner,
-                step=1,
-                key="config_draws_per_banner",
-                on_change=_on_config_change,
-                help="每期卡池获得的抽数，可以结转到下一期",
-            )
-        with col3:
-            st.number_input(
-                "从第N期开始",
-                min_value=1,
-                value=st.session_state.config.draws_gain_per_banner_start_at,
-                step=1,
-                key="config_draws_per_banner_start_at",
-                on_change=_on_config_change,
-                help="每期卡池获得抽数从第几期开始生效（跳过前N-1期）",
-            )
-        with col4:
-            st.number_input(
-                "每期限定抽数",
-                min_value=0,
-                value=st.session_state.config.draws_gain_this_banner,
-                step=1,
-                key="config_draws_this_banner",
-                on_change=_on_config_change,
-                help="每期卡池获得的限定抽数，仅限当期使用，不结转",
-            )
-
-
 def render_simulation_section():
     """Render the simulation controls and results."""
     st.header("运行模拟")
@@ -1081,8 +1023,8 @@ def render_simulation_section():
     # Strategy section (moved here from app.py)
     render_strategy_section()
 
-    # Resource configuration (for advanced simulation only)
-    _render_resource_config()
+    # Config section (resource config and miss counting config)
+    render_config_section()
 
     # Number of experiments
     num_experiments = st.number_input(
@@ -1409,9 +1351,11 @@ def _execute_simulation(num_experiments: int, auto_config: dict):
             # Get template for auto banners
             template_idx = auto_config.get("template_idx", 0)
             if template_idx < len(st.session_state.banner_templates):
-                auto_banner_template = st.session_state.banner_templates[
-                    template_idx
-                ].model_copy(deep=True)
+                from banner import BannerTemplate
+
+                auto_banner_template = BannerTemplate(
+                    **st.session_state.banner_templates[template_idx].model_dump()
+                )
 
             # Get strategy for auto banners
             strategy_idx = auto_config.get("strategy_idx", 0)

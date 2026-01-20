@@ -20,6 +20,14 @@ def _on_config_change():
     update_url()
 
 
+def _on_miss_config_change():
+    """Callback when miss config changes."""
+    st.session_state.config.new_non_up_counts_as_miss = (
+        st.session_state.config_new_non_up_counts_as_miss
+    )
+    update_url()
+
+
 def render_config_section():
     """Render the resource configuration section."""
     st.header("设置")
@@ -67,3 +75,21 @@ def render_config_section():
                 on_change=_on_config_change,
                 help="每期卡池获得的限定抽数，仅限当期使用，不结转",
             )
+
+    # Miss counting config
+    st.subheader("歪统计配置")
+    with st.container(border=True):
+        # Pre-initialize widget key to avoid conflict with value parameter
+        if "config_new_non_up_counts_as_miss" not in st.session_state:
+            st.session_state.config_new_non_up_counts_as_miss = (
+                st.session_state.config.new_non_up_counts_as_miss
+            )
+        st.checkbox(
+            "首次歪到往期UP也算歪",
+            key="config_new_non_up_counts_as_miss",
+            on_change=_on_miss_config_change,
+        )
+        st.caption(
+            "**开启**：抽到非当期UP的6星都算歪（包括首次抽到往期UP）\n\n"
+            "**关闭**：首次抽到往期UP不算歪，只有重复抽到往期UP才算歪（常驻池6星始终算歪）"
+        )

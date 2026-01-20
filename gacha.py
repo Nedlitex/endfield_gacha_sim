@@ -187,6 +187,7 @@ class Player(BaseModel):
         banner: Banner,
         repeat: int,
         is_special_draw: bool = False,
+        new_non_up_counts_as_miss: bool = True,
     ) -> tuple[int, int, bool, bool, bool, bool, int]:
         """Draw from banner and add operators to box.
 
@@ -194,6 +195,10 @@ class Player(BaseModel):
             banner: The banner to draw from
             repeat: Number of draws to perform
             is_special_draw: Whether these are special draws
+            new_non_up_counts_as_miss: Whether getting a NEW non-UP main operator
+                (from another banner) counts as a miss. If False, getting a new
+                main operator from another banner doesn't count as miss (only
+                dupes count). Regular pool operators always count as miss.
 
         Returns:
             Tuple of [special draws rewarded, next banner draws rewarded,
@@ -219,6 +224,12 @@ class Player(BaseModel):
             # Use draws_accumulated (excludes special draws) for fair comparison
             # This matches the definitive draw guarantee which is based on non-special draws
             for operator in result.reward.operators:
+                # Check if operator is already owned BEFORE adding to box
+                # This is needed to determine if it's a "new" operator for miss counting
+                is_already_owned = operator.name in self.operators.get(
+                    operator.rarity, {}
+                )
+
                 self._add_operator_to_box(
                     operator=operator,
                     banner_draw=banner.draws_accumulated,
@@ -227,12 +238,23 @@ class Player(BaseModel):
                 # Track highest rarity obtained
                 if operator.rarity == highest_rarity:
                     got_highest_rarity = True
-                    # Track if highest rarity but not main
+                    # Track if highest rarity but not main (歪/miss)
                     if (
                         not banner.main_operator
                         or operator.name != banner.main_operator.name
                     ):
-                        got_highest_rarity_but_not_main = True
+                        # Determine if this should count as a miss:
+                        # - Regular pool operators (banner=None) always count as miss
+                        # - Main operators from other banners:
+                        #   - If new_non_up_counts_as_miss is True: always count as miss
+                        #   - If False: only count as miss if already owned (dupe)
+                        is_main_operator = operator.banner is not None
+                        if not is_main_operator:
+                            # Regular pool operator - always counts as miss
+                            got_highest_rarity_but_not_main = True
+                        elif new_non_up_counts_as_miss or is_already_owned:
+                            # Main operator from another banner - check config
+                            got_highest_rarity_but_not_main = True
                 # Track main operator copies
                 if banner.main_operator and operator.name == banner.main_operator.name:
                     main_copies += 1
@@ -311,6 +333,10 @@ class Config(BaseModel):
     draws_gain_this_banner: int = Field(
         default=0,
         description="Number of draws gained per banner that can only be used on that banner (does not carry over)",
+    )
+    new_non_up_counts_as_miss: bool = Field(
+        default=True,
+        description="Whether getting a NEW (not already owned) non-UP main operator (from another banner) counts as a miss (歪)",
     )
 
 
@@ -691,6 +717,11 @@ class Run(BaseModel):
                             banner=banner,
                             repeat=special_to_use,
                             is_special_draw=True,
+                            new_non_up_counts_as_miss=(
+                                self.config.new_non_up_counts_as_miss
+                                if self.config
+                                else True
+                            ),
                         )
                         # Special draws can reward more special draws and next banner draws
                         resource.add_special_draws(special)
@@ -723,6 +754,11 @@ class Run(BaseModel):
                             banner=banner,
                             repeat=current_to_use,
                             is_special_draw=False,
+                            new_non_up_counts_as_miss=(
+                                self.config.new_non_up_counts_as_miss
+                                if self.config
+                                else True
+                            ),
                         )
                         resource.add_special_draws(special)
                         next_banner_reward_total += reward
@@ -798,6 +834,11 @@ class Run(BaseModel):
                         banner=banner,
                         repeat=draw_amount,
                         is_special_draw=False,
+                        new_non_up_counts_as_miss=(
+                            self.config.new_non_up_counts_as_miss
+                            if self.config
+                            else True
+                        ),
                     )
                     resource.add_special_draws(special)
                     next_banner_reward_total += reward
