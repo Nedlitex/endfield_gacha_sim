@@ -212,8 +212,8 @@ class BannerIndexCondition(BaseModel):
     - Banner 1 has index 0, Banner 2 has index 1, etc.
 
     Examples:
-    - every_n=0: matches all banners (no filtering)
-    - every_n=1: matches banner 1, 2, 3, ... (same as 0, every banner)
+    - every_n=0, start_at=3: matches only banner 3
+    - every_n=1: matches banner 1, 2, 3, ... (every banner)
     - every_n=2, start_at=1: matches banner 1, 3, 5, ... (odd banners)
     - every_n=2, start_at=2: matches banner 2, 4, 6, ... (even banners)
     - every_n=3, start_at=1: matches banner 1, 4, 7, ...
@@ -225,7 +225,7 @@ class BannerIndexCondition(BaseModel):
     every_n: int = Field(
         default=0,
         ge=0,
-        description="Apply on every Nth banner (0 = every banner)",
+        description="Apply on every Nth banner (0 = only at start_at banner, 1 = every banner)",
     )
     start_at: int = Field(
         default=1,
@@ -234,8 +234,11 @@ class BannerIndexCondition(BaseModel):
     )
 
     def evaluate(self, context: EvaluationContext) -> bool:
-        # 0 or 1 means every banner
-        if self.every_n <= 1:
+        # every_n=0 means only match at specific banner (start_at)
+        if self.every_n == 0:
+            return context.banner_index == self.start_at - 1
+        # every_n=1 means every banner
+        if self.every_n == 1:
             return True
         # Convert start_at (1-based) to offset (0-based)
         # start_at=1 -> offset=0, start_at=2 -> offset=1, etc.
@@ -765,7 +768,9 @@ class DrawStrategy(BaseModel):
         elif isinstance(cond, GotPityWithoutMainCondition):
             return "歪了(保底未出UP)" if cond.value else "未歪"
         elif isinstance(cond, BannerIndexCondition):
-            if cond.every_n <= 1:
+            if cond.every_n == 0:
+                return f"仅第{cond.start_at}个池子"
+            if cond.every_n == 1:
                 return "每个池子"
             return f"每{cond.every_n}个池子的第{cond.start_at}个"
         elif isinstance(cond, PityCounterCondition):

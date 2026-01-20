@@ -202,7 +202,9 @@ def _condition_to_text(cond: StrategyCondition) -> str:
     elif isinstance(cond, GotPityWithoutMainCondition):
         return "歪了(保底未出UP)" if cond.value else "未歪"
     elif isinstance(cond, BannerIndexCondition):
-        if cond.every_n <= 1:
+        if cond.every_n == 0:
+            return f"仅第{cond.start_at}个池子"
+        if cond.every_n == 1:
             return "每个池子"
         return f"每{cond.every_n}个池子的第{cond.start_at}个"
     elif isinstance(cond, PityCounterCondition):
@@ -410,18 +412,29 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 value=2,
                 step=1,
                 key=f"{prefix}new_rule_banner_every_n",
-                help="0=每个池子, 2=每2个池子中选1个",
+                help="0=仅指定池子, 1=每个池子, 2=每2个池子中选1个",
             )
         with col2:
-            max_start = banner_every_n if banner_every_n > 1 else 1
+            # When every_n=0, allow any start_at (specific banner)
+            # When every_n=1, start_at doesn't matter (every banner)
+            # When every_n>=2, limit start_at to every_n
+            max_start = (
+                999
+                if banner_every_n == 0
+                else (banner_every_n if banner_every_n > 1 else 1)
+            )
             banner_start_at = st.number_input(
-                "从第几个池子开始",
+                "第几个池子" if banner_every_n == 0 else "从第几个池子开始",
                 min_value=1,
                 max_value=max(1, max_start),
                 value=1,
                 step=1,
                 key=f"{prefix}new_rule_banner_start_at",
-                help="1=第1,3,5...个, 2=第2,4,6...个(每2池时)",
+                help=(
+                    "指定池子序号"
+                    if banner_every_n == 0
+                    else "1=第1,3,5...个, 2=第2,4,6...个(每2池时)"
+                ),
             )
 
     # Pity counter condition
@@ -1326,18 +1339,29 @@ def _render_creation_rule_editor(prefix: str):
                 value=2,
                 step=1,
                 key=f"{rule_prefix}banner_every_n",
-                help="0=每个池子, 2=每2个池子中选1个",
+                help="0=仅指定池子, 1=每个池子, 2=每2个池子中选1个",
             )
         with col2:
-            max_start = banner_every_n if banner_every_n > 1 else 1
+            # When every_n=0, allow any start_at (specific banner)
+            # When every_n=1, start_at doesn't matter (every banner)
+            # When every_n>=2, limit start_at to every_n
+            max_start = (
+                999
+                if banner_every_n == 0
+                else (banner_every_n if banner_every_n > 1 else 1)
+            )
             banner_start_at = st.number_input(
-                "从第几个池子开始",
+                "第几个池子" if banner_every_n == 0 else "从第几个池子开始",
                 min_value=1,
                 max_value=max(1, max_start),
                 value=1,
                 step=1,
                 key=f"{rule_prefix}banner_start_at",
-                help="1=第1,3,5...个, 2=第2,4,6...个(每2池时)",
+                help=(
+                    "指定池子序号"
+                    if banner_every_n == 0
+                    else "1=第1,3,5...个, 2=第2,4,6...个(每2池时)"
+                ),
             )
 
     # Pity counter condition
