@@ -5,7 +5,7 @@ import asyncio
 import pandas as pd
 import streamlit as st
 
-from banner import Banner
+from banner import Banner, RewardType
 from gacha import Config, Run
 from strategy import ContinueAction, DrawBehavior, DrawStrategy
 from ui.components.st_horizontal import st_horizontal
@@ -106,7 +106,9 @@ def _render_quick_simulation_section():
 
             if st.button("清空卡池列表", key="quick_sim_clear_banners"):
                 st.session_state.quick_sim_banner_list = []
-                st.session_state.quick_sim_auto_banner_count = 0
+                # Delete the widget key to allow re-initialization with default
+                if "quick_sim_auto_banner_count" in st.session_state:
+                    del st.session_state.quick_sim_auto_banner_count
                 st.rerun()
         else:
             st.caption("尚未添加卡池")
@@ -116,11 +118,13 @@ def _render_quick_simulation_section():
         st.caption("在已选卡池之后，使用模板自动生成更多卡池继续模拟（UP干员随机生成）")
         col1, col2 = st.columns([1, 2])
         with col1:
+            # Initialize if not present (widget key requires pre-initialization)
+            if "quick_sim_auto_banner_count" not in st.session_state:
+                st.session_state.quick_sim_auto_banner_count = 0
             auto_count = st.number_input(
                 "自动添加数量",
                 min_value=0,
                 max_value=100,
-                value=st.session_state.get("quick_sim_auto_banner_count", 0),
                 step=1,
                 key="quick_sim_auto_banner_count",
                 on_change=_on_quick_sim_config_change,
@@ -220,6 +224,10 @@ def _render_trial_draw_section():
         st.session_state.trial_draw_inherited_draws = (
             {}
         )  # Per-banner inherited draws (from previous banner)
+    if "trial_draw_inherited_reward_states" not in st.session_state:
+        st.session_state.trial_draw_inherited_reward_states = (
+            {}
+        )  # Inherited reward states (pity, definitive, etc.) for next banner
 
     # Get current banner index and name
     banner_names = [b.name for b in st.session_state.banners]
@@ -242,9 +250,7 @@ def _render_trial_draw_section():
         if current_idx < len(banner_names):
             # Use existing banner as source
             source_banner = st.session_state.banners[current_idx]
-            st.session_state.trial_draw_banner_instances[current_banner_name] = (
-                source_banner.model_copy(deep=True)
-            )
+            new_banner = source_banner.model_copy(deep=True)
         else:
             # Auto-generate a new banner using the first banner's template
             from banner import create_next_banner
@@ -259,15 +265,23 @@ def _render_trial_draw_section():
             previous_banners = list(
                 st.session_state.trial_draw_banner_instances.values()
             )
-            auto_banner = create_next_banner(
+            new_banner = create_next_banner(
                 template=template.model_copy(deep=True),
                 default_operators=create_default_operators(),
                 previous_banners=previous_banners,
                 banner_name=current_banner_name,
             )
-            st.session_state.trial_draw_banner_instances[current_banner_name] = (
-                auto_banner
-            )
+
+        # Apply inherited reward states from previous banner (if any)
+        inherited_reward_states = st.session_state.get(
+            "trial_draw_inherited_reward_states", {}
+        )
+        if inherited_reward_states:
+            new_banner.reset(inherited_reward_states)
+            # Clear the inherited states after applying
+            st.session_state.trial_draw_inherited_reward_states = {}
+
+        st.session_state.trial_draw_banner_instances[current_banner_name] = new_banner
 
     trial_banner = st.session_state.trial_draw_banner_instances[current_banner_name]
 
@@ -292,6 +306,21 @@ def _render_trial_draw_section():
                     f"<span style='color:{color}'><b>{rarity}星:</b> {names_str}</span>",
                     unsafe_allow_html=True,
                 )
+
+        # Display pity, definitive, and potential counters
+        pity_counter = trial_banner.reward_states[RewardType.PITY].counter
+        pity_limit = trial_banner.template.pity_draw_limit
+        definitive_counter = trial_banner.reward_states[RewardType.DEFINITIVE].counter
+        definitive_limit = trial_banner.template.definitive_draw_count
+        potential_counter = trial_banner.reward_states[RewardType.POTENTIAL].counter
+        potential_limit = trial_banner.template.potential_reward_draw
+        potential_left = potential_limit - potential_counter
+
+        st.markdown(
+            f"**小保底:** {pity_counter}/{pity_limit} | "
+            f"**大保底:** {definitive_counter}/{definitive_limit} | "
+            f"**距离潜能奖励:** {potential_left}抽"
+        )
 
     # Get special draws available for this banner
     special_draws_available = st.session_state.trial_draw_special_draws.get(
@@ -354,10 +383,17 @@ def _render_trial_draw_section():
             # When moving to next banner:
             # 1. Any unused inherited draws on current banner are lost (cleared)
             # 2. Pending inherited draws (earned this banner) are assigned to the new banner
+            # 3. Get inherited reward states from current banner for the next banner
 
             # Clear unused inherited draws on current banner (they are lost)
             if current_banner_name in st.session_state.trial_draw_inherited_draws:
                 del st.session_state.trial_draw_inherited_draws[current_banner_name]
+
+            # Get inherited reward states from current banner
+            inherited_reward_states = trial_banner.get_inherited_reward_states()
+            st.session_state.trial_draw_inherited_reward_states = (
+                inherited_reward_states
+            )
 
             # Move to next banner
             st.session_state.trial_draw_banner_idx += 1
@@ -376,6 +412,7 @@ def _render_trial_draw_section():
                 st.session_state.trial_draw_inherited_draws[new_banner_name] = pending
                 st.session_state.trial_draw_pending_inherited = 0
 
+            update_url()
             st.rerun()
         if st.button("清空结果", key="trial_draw_clear"):
             st.session_state.trial_draw_results = []
@@ -387,10 +424,13 @@ def _render_trial_draw_section():
             st.session_state.trial_draw_inherited_draws = {}
             # Reset pending inherited draws
             st.session_state.trial_draw_pending_inherited = 0
+            # Reset inherited reward states
+            st.session_state.trial_draw_inherited_reward_states = {}
             # Reset banner index
             st.session_state.trial_draw_banner_idx = 0
             # Reset pagination
             st.session_state.trial_draw_page = 1
+            update_url()
             st.rerun()
 
     # Show info about available draws (after buttons so they don't move)
@@ -470,6 +510,9 @@ def _do_trial_draw(
             st.session_state.trial_draw_pending_inherited += (
                 result.reward.next_banner_draws
             )
+
+    # Update URL to persist trial draw state
+    update_url()
 
 
 def _render_trial_draw_results():
@@ -558,8 +601,10 @@ def _render_trial_draw_results():
 
     st.markdown(" | ".join(summary_parts), unsafe_allow_html=True)
 
-    # Detailed stats row (no UP count since it changes across banners)
+    # Detailed stats row
     detail_parts = []
+    if main_count > 0:
+        detail_parts.append(f"🎯 UP×{main_count}")
     if pity_count > 0:
         detail_parts.append(f"🔸 小保底×{pity_count}")
     if definitive_count > 0:

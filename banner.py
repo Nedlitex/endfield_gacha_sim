@@ -468,6 +468,26 @@ def create_next_banner(
     )
 
 
+def prepare_banner_for_next(
+    current_banner: "Banner",
+    next_banner: "Banner",
+) -> None:
+    """Prepare the next banner by inheriting reward states from the current banner.
+
+    This is the shared banner transition routine used by both trial draw UI and simulation.
+    It handles inheriting reward counters (pity, definitive, potential, etc.) based on
+    each reward type's inherit policy defined in the banner template.
+
+    Args:
+        current_banner: The banner that was just completed.
+        next_banner: The banner to transition to (will be modified in place).
+    """
+    # Get inherited reward states from current banner based on template policies
+    inherited_states = current_banner.get_inherited_reward_states()
+    # Reset next banner with inherited states
+    next_banner.reset(inherited_states)
+
+
 class Operator(BaseModel):
     """Represents a gacha operator/character with their stats across simulations."""
 

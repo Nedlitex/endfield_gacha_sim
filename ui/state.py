@@ -99,6 +99,12 @@ def serialize_state() -> str:
         "trial_draw_pending_inherited": st.session_state.get(
             "trial_draw_pending_inherited", 0
         ),
+        "trial_draw_inherited_reward_states": {
+            k.value if hasattr(k, "value") else k: v
+            for k, v in st.session_state.get(
+                "trial_draw_inherited_reward_states", {}
+            ).items()
+        },
         "trial_draw_page": st.session_state.get("trial_draw_page", 1),
     }
     json_str = json.dumps(state, ensure_ascii=False)
@@ -259,6 +265,15 @@ def initialize_session_state():
                 st.session_state.trial_draw_pending_inherited = state.get(
                     "trial_draw_pending_inherited", 0
                 )
+                # Load inherited reward states (convert string keys back to RewardType)
+                from banner import RewardType
+
+                inherited_states_data = state.get(
+                    "trial_draw_inherited_reward_states", {}
+                )
+                st.session_state.trial_draw_inherited_reward_states = {
+                    RewardType(k): v for k, v in inherited_states_data.items()
+                }
                 st.session_state.trial_draw_page = state.get("trial_draw_page", 1)
             except Exception:
                 _initialize_defaults()
@@ -294,4 +309,5 @@ def _initialize_defaults():
     st.session_state.trial_draw_special_draws = {}
     st.session_state.trial_draw_inherited_draws = {}
     st.session_state.trial_draw_pending_inherited = 0
+    st.session_state.trial_draw_inherited_reward_states = {}
     st.session_state.trial_draw_page = 1
