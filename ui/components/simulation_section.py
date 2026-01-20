@@ -539,7 +539,11 @@ def _render_results():
 
     # Display main operator stats prominently
     if main_op_stats:
-        st.markdown("#### 🎯 主要干员首抽期望(非赠送抽使用)")
+        st.markdown("#### 🎯 UP干员首抽期望(非赠送抽使用)")
+        st.info(
+            "此数值为**获取到UP干员时**的平均抽数，请结合下方获取率一起参考。"
+            "若获取率较低，说明大部分模拟中未抽到该干员。"
+        )
         cols = st.columns(len(main_op_stats))
         for i, (name, expected, acq_rate) in enumerate(main_op_stats):
             with cols[i]:

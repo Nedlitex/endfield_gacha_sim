@@ -45,7 +45,8 @@ class EvaluationContext(BaseModel):
         default=False, description="Whether pity triggered without getting main"
     )
     current_potential: int = Field(
-        default=0, description="Current number of copies of main operator obtained"
+        default=0,
+        description="Current number of copies of main operator obtained (0 = none, 1 = base copy, 2 = potential 1, etc.)",
     )
     banner_index: int = Field(default=0, description="Current banner index (0-based)")
     pity_counter: int = Field(
@@ -372,7 +373,8 @@ class ContinueAction(BaseModel):
     target_potential: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Target number of main operator copies to obtain. None = don't target potential.",
+        le=6,
+        description="Target potential level (1-6). Potential N requires N+1 copies. None = don't target potential.",
     )
     target_pity: Optional[int] = Field(
         default=None,
@@ -580,8 +582,10 @@ class DrawStrategy(BaseModel):
                 return False
 
             # Check target_potential constraint
+            # target_potential=1 means potential level 1, which requires 2 copies
+            # (base copy + 1 duplicate), so we need current_potential >= target_potential + 1
             if action.target_potential is not None:
-                if context.current_potential >= action.target_potential:
+                if context.current_potential >= action.target_potential + 1:
                     return False
 
             # Check target_pity constraint (stop when reached target pity)
