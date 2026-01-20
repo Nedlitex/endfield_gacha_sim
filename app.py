@@ -14,7 +14,6 @@ from ui.components.sidebar import (
     render_template_management,
 )
 from ui.components.simulation_section import render_simulation_section
-from ui.components.strategy_section import render_strategy_section
 from ui.state import initialize_session_state
 
 # Initialize state from URL or defaults
@@ -37,5 +36,4 @@ with st.sidebar:
 
 # Main content
 render_banner_display()
-render_strategy_section()
 render_simulation_section()

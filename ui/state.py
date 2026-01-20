@@ -34,6 +34,21 @@ def serialize_state() -> str:
             ),
         }
 
+    # Serialize quick sim results if present
+    quick_sim_results_data = None
+    if st.session_state.get("quick_sim_results"):
+        results = st.session_state.quick_sim_results
+        quick_sim_results_data = {
+            "player": results["player"].model_dump(),
+            "paid_draws": results["paid_draws"],
+            "total_draws": results["total_draws"],
+            "num_experiments": results["num_experiments"],
+            "num_banners": results["num_banners"],
+            "banner_names": results["banner_names"],
+            "auto_banner_count": results.get("auto_banner_count", 0),
+            "main_operators": results.get("main_operators", []),
+        }
+
     state = {
         "operators": [op.model_dump() for op in st.session_state.operators],
         "banners": [banner.model_dump() for banner in st.session_state.banners],
@@ -51,6 +66,17 @@ def serialize_state() -> str:
         "auto_banner_template_idx": st.session_state.get("auto_banner_template_idx", 0),
         "auto_banner_strategy_idx": st.session_state.get("auto_banner_strategy_idx", 0),
         "run_results": run_results_data,
+        # Quick simulation state
+        "quick_sim_banner_list": st.session_state.get("quick_sim_banner_list", []),
+        "quick_sim_auto_banner_count": st.session_state.get(
+            "quick_sim_auto_banner_count", 0
+        ),
+        "quick_sim_auto_template_idx": st.session_state.get(
+            "quick_sim_auto_template_idx", 0
+        ),
+        "quick_sim_experiments": st.session_state.get("quick_sim_experiments", 1000),
+        "quick_sim_single_draw": st.session_state.get("quick_sim_single_draw", False),
+        "quick_sim_results": quick_sim_results_data,
     }
     json_str = json.dumps(state, ensure_ascii=False)
     compressed = zlib.compress(json_str.encode(), level=9)
@@ -154,6 +180,37 @@ def initialize_session_state():
                     }
                 else:
                     st.session_state.run_results = None
+                # Load quick simulation state (only set banner list if non-empty to allow default initialization)
+                saved_banner_list = state.get("quick_sim_banner_list", [])
+                if saved_banner_list:
+                    st.session_state.quick_sim_banner_list = saved_banner_list
+                st.session_state.quick_sim_auto_banner_count = state.get(
+                    "quick_sim_auto_banner_count", 0
+                )
+                st.session_state.quick_sim_auto_template_idx = state.get(
+                    "quick_sim_auto_template_idx", 0
+                )
+                st.session_state.quick_sim_experiments = state.get(
+                    "quick_sim_experiments", 1000
+                )
+                st.session_state.quick_sim_single_draw = state.get(
+                    "quick_sim_single_draw", False
+                )
+                # Load quick sim results
+                if "quick_sim_results" in state and state["quick_sim_results"]:
+                    quick_data = state["quick_sim_results"]
+                    st.session_state.quick_sim_results = {
+                        "player": Player(**quick_data["player"]),
+                        "paid_draws": quick_data["paid_draws"],
+                        "total_draws": quick_data["total_draws"],
+                        "num_experiments": quick_data["num_experiments"],
+                        "num_banners": quick_data["num_banners"],
+                        "banner_names": quick_data["banner_names"],
+                        "auto_banner_count": quick_data.get("auto_banner_count", 0),
+                        "main_operators": quick_data.get("main_operators", []),
+                    }
+                else:
+                    st.session_state.quick_sim_results = None
             except Exception:
                 _initialize_defaults()
         else:
@@ -175,3 +232,9 @@ def _initialize_defaults():
     st.session_state.auto_banner_count = 0
     st.session_state.auto_banner_template_idx = 0
     st.session_state.auto_banner_strategy_idx = 0
+    # Quick simulation defaults (quick_sim_banner_list not set here - initialized in render function)
+    st.session_state.quick_sim_auto_banner_count = 0
+    st.session_state.quick_sim_auto_template_idx = 0
+    st.session_state.quick_sim_experiments = 1000
+    st.session_state.quick_sim_single_draw = False
+    st.session_state.quick_sim_results = None

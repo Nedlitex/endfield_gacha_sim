@@ -7,7 +7,8 @@ import streamlit as st
 
 from banner import Banner
 from gacha import Config, Run
-from strategy import DrawStrategy
+from strategy import ContinueAction, DrawBehavior, DrawStrategy
+from ui.components.strategy_section import render_strategy_section
 from ui.constants import RARITY_COLORS
 from ui.defaults import create_default_operators
 from ui.state import update_url
@@ -49,6 +50,386 @@ def _on_config_change():
         st.session_state.config_draws_this_banner
     )
     update_url()
+
+
+def _on_quick_sim_config_change():
+    """Callback when quick simulation config changes."""
+    update_url()
+
+
+def _render_quick_simulation_section():
+    """Render the quick simulation section (collapsed by default)."""
+    with st.expander("快速模拟", expanded=False):
+        st.caption("无初始抽数，氪金抽到UP为止，计算每个卡池的平均氪金抽数")
+
+        if not st.session_state.banners:
+            st.info("请先创建卡池")
+            return
+
+        # Initialize quick sim banner list with all banners by default
+        if "quick_sim_banner_list" not in st.session_state:
+            st.session_state.quick_sim_banner_list = [
+                b.name for b in st.session_state.banners
+            ]
+
+        # Banner selection - add banners to list
+        st.markdown("**添加卡池**")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            banner_names = [b.name for b in st.session_state.banners]
+            selected_banner_idx = st.selectbox(
+                "选择卡池",
+                range(len(banner_names)),
+                format_func=lambda x: banner_names[x],
+                key="quick_sim_banner_select",
+                label_visibility="collapsed",
+            )
+        with col2:
+            if st.button("添加", key="quick_sim_add_banner"):
+                banner_name = banner_names[selected_banner_idx]
+                if banner_name not in st.session_state.quick_sim_banner_list:
+                    st.session_state.quick_sim_banner_list.append(banner_name)
+                    st.rerun()
+
+        # Show selected banners
+        if st.session_state.quick_sim_banner_list:
+            st.markdown("**已选卡池序列:**")
+            display_text = " → ".join(st.session_state.quick_sim_banner_list)
+            st.markdown(
+                f"<span style='color: #ff4b4b; font-size: 1.2em; font-weight: bold;'>{display_text}</span>",
+                unsafe_allow_html=True,
+            )
+
+            if st.button("清空卡池列表", key="quick_sim_clear_banners"):
+                st.session_state.quick_sim_banner_list = []
+                st.session_state.quick_sim_auto_banner_count = 0
+                st.rerun()
+        else:
+            st.caption("尚未添加卡池")
+
+        # Auto banner configuration
+        st.markdown("**自动添加卡池**")
+        st.caption("在已选卡池之后，使用模板自动生成更多卡池继续模拟（UP干员随机生成）")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            auto_count = st.number_input(
+                "自动添加数量",
+                min_value=0,
+                max_value=100,
+                value=st.session_state.get("quick_sim_auto_banner_count", 0),
+                step=1,
+                key="quick_sim_auto_banner_count",
+                on_change=_on_quick_sim_config_change,
+                help="在已选卡池后自动生成的卡池数量",
+            )
+        with col2:
+            template_names = [t.name for t in st.session_state.banner_templates]
+            current_template_idx = st.session_state.get(
+                "quick_sim_auto_template_idx", 0
+            )
+            if current_template_idx >= len(template_names):
+                current_template_idx = 0
+            st.selectbox(
+                "卡池模板",
+                range(len(template_names)),
+                index=current_template_idx,
+                format_func=lambda x: template_names[x],
+                key="quick_sim_auto_template_idx",
+                on_change=_on_quick_sim_config_change,
+                help="自动生成卡池使用的模板",
+            )
+
+        st.markdown("---")
+
+        # Configuration row
+        num_experiments = st.number_input(
+            "模拟次数",
+            min_value=1,
+            max_value=100000,
+            value=st.session_state.get("quick_sim_experiments", 1000),
+            step=100,
+            key="quick_sim_experiments",
+            on_change=_on_quick_sim_config_change,
+        )
+
+        # Options row - only single draw option, always pay mode
+        single_draw = st.checkbox(
+            "单抽模式",
+            value=st.session_state.get("quick_sim_single_draw", False),
+            key="quick_sim_single_draw",
+            on_change=_on_quick_sim_config_change,
+            help="勾选后每次抽1次，否则每次抽10次",
+        )
+
+        # Run button
+        has_banners = st.session_state.quick_sim_banner_list or auto_count > 0
+        if has_banners:
+            if st.button("运行快速模拟", type="primary", key="quick_sim_run"):
+                auto_template_idx = st.session_state.get(
+                    "quick_sim_auto_template_idx", 0
+                )
+                auto_template = None
+                if auto_count > 0 and auto_template_idx < len(
+                    st.session_state.banner_templates
+                ):
+                    auto_template = st.session_state.banner_templates[auto_template_idx]
+                _execute_quick_simulation(
+                    st.session_state.quick_sim_banner_list,
+                    num_experiments,
+                    single_draw,
+                    auto_banner_count=auto_count,
+                    auto_banner_template=auto_template,
+                )
+        else:
+            st.button(
+                "运行快速模拟", type="primary", key="quick_sim_run", disabled=True
+            )
+
+        # Display quick simulation results
+        if st.session_state.quick_sim_results:
+            _render_quick_simulation_results()
+
+
+def _execute_quick_simulation(
+    banner_name_list: list[str],
+    num_experiments: int,
+    single_draw: bool,
+    auto_banner_count: int = 0,
+    auto_banner_template=None,
+):
+    """Execute quick simulation with multiple banners."""
+    # Create a simple "always continue until main" strategy with pay mode
+    quick_sim_strategy = DrawStrategy(
+        name="快速模拟策略",
+        behavior=DrawBehavior(
+            always_single_draw=single_draw,
+            single_draw_after=0,
+            pay=True,  # Always pay mode for quick simulation
+        ),
+        rules=[],  # No special rules, use default action
+        default_action=ContinueAction(
+            stop_on_main=True
+        ),  # Stop after getting main operator
+    )
+
+    # Build banner list from names
+    banner_name_to_banner = {b.name: b for b in st.session_state.banners}
+    banners_for_run = []
+    banner_strategies = {}
+    main_operators = []
+
+    for idx, name in enumerate(banner_name_list):
+        if name in banner_name_to_banner:
+            banner_copy = banner_name_to_banner[name].model_copy(deep=True)
+            # Make unique name for each banner
+            unique_name = f"{name}_{idx}"
+            banner_copy.name = unique_name
+            banners_for_run.append(banner_copy)
+            banner_strategies[unique_name] = quick_sim_strategy
+            if (
+                banner_copy.main_operator
+                and banner_copy.main_operator.name not in main_operators
+            ):
+                main_operators.append(banner_copy.main_operator.name)
+
+    if not banners_for_run and auto_banner_count == 0:
+        st.error("没有有效的卡池")
+        return
+
+    # Quick sim uses default config - no initial draws, pay for everything
+    config = Config()
+
+    # Prepare auto banner configuration
+    auto_banner_template_copy = None
+    auto_banner_default_operators = []
+    if auto_banner_count > 0 and auto_banner_template:
+        auto_banner_template_copy = auto_banner_template.model_copy(deep=True)
+        auto_banner_default_operators = create_default_operators()
+
+    run = Run(
+        config=config,
+        banners=banners_for_run,
+        banner_strategies=banner_strategies,
+        repeat=num_experiments,
+        auto_banner_template=auto_banner_template_copy,
+        auto_banner_strategy=quick_sim_strategy if auto_banner_count > 0 else None,
+        auto_banner_count=auto_banner_count,
+        auto_banner_default_operators=auto_banner_default_operators,
+    )
+
+    # Run with progress
+    progress_bar = st.progress(0, text=f"正在运行快速模拟... 0/{num_experiments}")
+
+    def update_progress(current: int, total: int):
+        progress = current / total if total > 0 else 0
+        progress_bar.progress(progress, text=f"正在运行快速模拟... {current}/{total}")
+
+    async def run_async():
+        return await run.run_simulation_async(
+            yield_every=max(1, num_experiments // 100),
+            progress_callback=update_progress,
+        )
+
+    result_player = asyncio.run(run_async())
+    progress_bar.empty()
+
+    # Store results
+    total_banners = len(banners_for_run) + auto_banner_count
+    st.session_state.quick_sim_results = {
+        "player": result_player,
+        "paid_draws": run.paid_draws,
+        "total_draws": run.total_draws,
+        "num_experiments": num_experiments,
+        "num_banners": total_banners,
+        "banner_names": banner_name_list,
+        "auto_banner_count": auto_banner_count,
+        "main_operators": main_operators,
+    }
+    update_url()
+    st.rerun()
+
+
+def _render_quick_simulation_results():
+    """Render quick simulation results."""
+    results = st.session_state.quick_sim_results
+
+    # Build banner display string
+    banner_names = results["banner_names"]
+    auto_count = results.get("auto_banner_count", 0)
+    parts = []
+    if banner_names:
+        parts.append(" → ".join(banner_names))
+    if auto_count > 0:
+        parts.append(f"自动池×{auto_count}")
+    banner_display = " + ".join(parts) if parts else "无卡池"
+
+    st.markdown("---")
+    _render_simulation_results_shared(
+        results=results,
+        banner_display=banner_display,
+        is_quick_sim=True,
+        clear_button_key="clear_quick_sim",
+        clear_state_key="quick_sim_results",
+    )
+
+
+def _render_simulation_results_shared(
+    results: dict,
+    banner_display: str,
+    is_quick_sim: bool,
+    clear_button_key: str,
+    clear_state_key: str,
+):
+    """Shared function to render simulation results for both quick and advanced sim.
+
+    Args:
+        results: Dict containing player, paid_draws, total_draws, num_experiments, etc.
+        banner_display: String describing the banners that were simulated
+        is_quick_sim: Whether this is quick simulation (affects labels)
+        clear_button_key: Unique key for the clear button
+        clear_state_key: Session state key to clear when button is clicked
+    """
+    player = results["player"]
+    num_exp = results["num_experiments"]
+
+    # Get banner count
+    if is_quick_sim:
+        num_banners = results.get("num_banners", 1)
+    else:
+        num_banners = results.get("total_banner_count", len(results.get("banners", [])))
+
+    # Calculate averages
+    avg_total_per_run = results["total_draws"] / num_exp if num_exp > 0 else 0
+    avg_total_per_banner = avg_total_per_run / num_banners if num_banners > 0 else 0
+    avg_paid_per_run = results["paid_draws"] / num_exp if num_exp > 0 else 0
+    avg_paid_per_banner = avg_paid_per_run / num_banners if num_banners > 0 else 0
+
+    # Calculate average unique UPs obtained per run
+    main_ops = results.get("main_operators", [])
+    total_up_acquisitions = 0
+    for main_name in main_ops:
+        if 6 in player.operators and main_name in player.operators[6]:
+            op = player.operators[6][main_name]
+            total_up_acquisitions += op.first_draw_count
+    avg_unique_ups = total_up_acquisitions / num_exp if num_exp > 0 else 0
+
+    # Calculate main operator first draw expectations
+    main_op_stats = []
+    for main_name in main_ops:
+        if 6 in player.operators and main_name in player.operators[6]:
+            op = player.operators[6][main_name]
+            expected_first = (
+                (op.first_draw_total / op.first_draw_count)
+                if op.first_draw_count > 0
+                else 0
+            )
+            acquisition_rate = (
+                (op.first_draw_count / num_exp * 100) if num_exp > 0 else 0
+            )
+            main_op_stats.append((main_name, expected_first, acquisition_rate))
+
+    # Display summary stats prominently
+    st.markdown(f"**模拟次数:** {num_exp} | **参与卡池:** {banner_display}")
+
+    # Different metric display based on simulation type
+    if is_quick_sim:
+        # Quick sim: all draws are paid, so just show paid draws
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("每池平均氪金抽数", f"{avg_paid_per_banner:.1f}")
+        with col2:
+            if len(main_ops) > 0:
+                st.metric("平均获得UP数", f"{avg_unique_ups:.2f} / {len(main_ops)}")
+    else:
+        # Advanced sim: show both total and paid draws
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "每池平均总抽数",
+                f"{avg_total_per_banner:.1f}",
+                help="包含初始抽数和每期获得抽数",
+            )
+        with col2:
+            st.metric(
+                "每池平均氪金抽数",
+                f"{avg_paid_per_banner:.1f}",
+                help="额外氪金购买的抽数",
+            )
+        with col3:
+            if len(main_ops) > 0:
+                st.metric("平均获得UP数", f"{avg_unique_ups:.2f} / {len(main_ops)}")
+
+    # Display main operator stats prominently
+    if main_op_stats:
+        st.markdown("#### 🎯 UP干员首抽期望(氪金抽)")
+        st.info(
+            "此数值为**获取到UP干员时**的平均氪金抽数，请结合下方获取率一起参考。"
+            "若获取率较低，说明大部分模拟中未抽到该干员。"
+        )
+        cols = st.columns(len(main_op_stats))
+        for i, (name, expected, acq_rate) in enumerate(main_op_stats):
+            with cols[i]:
+                if acq_rate >= 99.5:
+                    # High acquisition rate, just show expected draws
+                    st.metric(name, f"{expected:.1f} 抽")
+                elif acq_rate > 0:
+                    # Show expected draws with acquisition rate
+                    st.metric(
+                        name,
+                        f"{expected:.1f} 抽",
+                        delta=f"获取率 {acq_rate:.1f}%",
+                        delta_color="off",
+                    )
+                else:
+                    # Never obtained
+                    st.metric(name, "未获取")
+
+    # Display operators by rarity
+    _render_operator_tables(player, num_exp)
+
+    if st.button("清除结果", key=clear_button_key):
+        st.session_state[clear_state_key] = None
+        st.rerun()
 
 
 def _render_resource_config():
@@ -98,6 +479,21 @@ def render_simulation_section():
         st.session_state.run_banner_strategies = {}
     if "run_results" not in st.session_state:
         st.session_state.run_results = None
+    if "quick_sim_results" not in st.session_state:
+        st.session_state.quick_sim_results = None
+
+    # Quick simulation section (collapsed by default)
+    _render_quick_simulation_section()
+
+    # Separator and Advanced simulation section
+    st.divider()
+    st.subheader("高级模拟")
+
+    # Strategy section (moved here from app.py)
+    render_strategy_section()
+
+    # Resource configuration (for advanced simulation only)
+    _render_resource_config()
 
     # Number of experiments
     num_experiments = st.number_input(
@@ -116,9 +512,6 @@ def render_simulation_section():
 
     # Auto banner configuration
     auto_config = _render_auto_banner_config()
-
-    # Resource configuration (right before run button)
-    _render_resource_config()
 
     # Run button
     if st.session_state.banners:
@@ -500,74 +893,17 @@ def _render_results():
     """Render the simulation results."""
     st.subheader("模拟结果")
     results = st.session_state.run_results
-    player = results["player"]
-    num_exp = results["num_experiments"]
 
-    # Use total_banner_count if available (includes auto banners), otherwise len(banners)
-    num_banners = results.get("total_banner_count", len(results["banners"]))
-    avg_total_per_run = results["total_draws"] / num_exp if num_exp > 0 else 0
-    avg_total_per_banner = avg_total_per_run / num_banners if num_banners > 0 else 0
-    avg_paid_per_run = results["paid_draws"] / num_exp if num_exp > 0 else 0
-    avg_paid_per_banner = avg_paid_per_run / num_banners if num_banners > 0 else 0
+    # Build banner display string
+    banner_display = ", ".join(results["banners"])
 
-    # Calculate main operator first draw expectations
-    main_ops = results.get("main_operators", [])
-    main_op_stats = []
-    for main_name in main_ops:
-        if 6 in player.operators and main_name in player.operators[6]:
-            op = player.operators[6][main_name]
-            expected_first = (
-                (op.first_draw_total / op.first_draw_count)
-                if op.first_draw_count > 0
-                else 0
-            )
-            acquisition_rate = (
-                (op.first_draw_count / num_exp * 100) if num_exp > 0 else 0
-            )
-            main_op_stats.append((main_name, expected_first, acquisition_rate))
-
-    # Display summary stats prominently
-    st.markdown(
-        f"**模拟次数:** {num_exp} | **参与卡池:** {', '.join(results['banners'])}"
+    _render_simulation_results_shared(
+        results=results,
+        banner_display=banner_display,
+        is_quick_sim=False,
+        clear_button_key="clear_run_results",
+        clear_state_key="run_results",
     )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("每池平均总抽数(含赠送抽)", f"{avg_total_per_banner:.1f}")
-    with col2:
-        st.metric("每池平均氪金抽数", f"{avg_paid_per_banner:.1f}")
-
-    # Display main operator stats prominently
-    if main_op_stats:
-        st.markdown("#### 🎯 UP干员首抽期望(非赠送抽使用)")
-        st.info(
-            "此数值为**获取到UP干员时**的平均抽数，请结合下方获取率一起参考。"
-            "若获取率较低，说明大部分模拟中未抽到该干员。"
-        )
-        cols = st.columns(len(main_op_stats))
-        for i, (name, expected, acq_rate) in enumerate(main_op_stats):
-            with cols[i]:
-                if acq_rate >= 99.5:
-                    # High acquisition rate, just show expected draws
-                    st.metric(name, f"{expected:.1f} 抽")
-                elif acq_rate > 0:
-                    # Show expected draws with acquisition rate
-                    st.metric(
-                        name,
-                        f"{expected:.1f} 抽",
-                        delta=f"获取率 {acq_rate:.1f}%",
-                        delta_color="off",
-                    )
-                else:
-                    # Never obtained
-                    st.metric(name, "未获取")
-
-    # Display operators by rarity
-    _render_operator_tables(player, num_exp)
-
-    if st.button("清除结果"):
-        st.session_state.run_results = None
-        st.rerun()
 
 
 def _render_operator_tables(player, num_exp: int):
