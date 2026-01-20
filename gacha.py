@@ -636,6 +636,24 @@ class Run(BaseModel):
                         self.config.draws_gain_this_banner
                     )
 
+                # Check strategy at banner entry (before any draws) to determine
+                # if we should use normal_draws on this banner.
+                # This check happens once at draws_accumulated=0 for check_once conditions.
+                current_pity = banner.reward_states[RewardType.PITY].counter
+                current_definitive = banner.reward_states[RewardType.DEFINITIVE].counter
+                should_use_normal_draws = self._should_continue_drawing(
+                    resource=resource,
+                    banner=banner,
+                    banner_index=banner_index,
+                    got_main=False,
+                    got_highest_rarity=False,
+                    got_highest_rarity_but_not_main=False,
+                    got_pity_without_main=False,
+                    current_potential=0,
+                    pity_counter=current_pity,
+                    definitive_draw_counter=current_definitive,
+                )
+
                 # Main draw loop - prioritize non-carryover resources
                 while True:
                     # Priority 1: Use special_draws first (they don't carry over)
@@ -671,6 +689,7 @@ class Run(BaseModel):
 
                     # Priority 2: Use current_banner_draws (they don't carry over)
                     # These are normal draws, not special draws
+                    # ALWAYS use these - they would be wasted otherwise
                     if resource.has_current_banner_draws():
                         # Use all current banner draws
                         current_to_use = resource.current_banner_draws
@@ -700,11 +719,16 @@ class Run(BaseModel):
                         continue
 
                     # Priority 3: Check if we should continue with normal draws
-                    # Get current counters from banner
+                    # First check the decision made at banner entry (for check_once conditions)
+                    if not should_use_normal_draws:
+                        break
+
+                    # Get current counters from banner for dynamic checks
                     current_pity = banner.reward_states[RewardType.PITY].counter
                     current_definitive = banner.reward_states[
                         RewardType.DEFINITIVE
                     ].counter
+                    # Check dynamic conditions (stop_on_main, max_draws, etc.)
                     if not self._should_continue_drawing(
                         resource=resource,
                         banner=banner,
