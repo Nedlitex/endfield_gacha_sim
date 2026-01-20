@@ -81,6 +81,27 @@ def _render_strategy_editor(current_strategy: DrawStrategy):
     """Render the advanced strategy editor."""
     strategy_key_prefix = f"strategy_{st.session_state.current_strategy_idx}_"
 
+    # === Name Section ===
+    st.markdown("### 策略名称")
+    existing_names = [
+        s.name
+        for i, s in enumerate(st.session_state.strategies)
+        if i != st.session_state.current_strategy_idx
+    ]
+    new_name = st.text_input(
+        "名称",
+        value=current_strategy.name,
+        key=f"{strategy_key_prefix}name",
+        help="策略名称，用于区分不同策略",
+    )
+    if new_name and new_name != current_strategy.name:
+        if new_name in existing_names:
+            st.error(f"策略名称「{new_name}」已存在，请使用其他名称")
+        else:
+            current_strategy.name = new_name
+            update_url()
+            st.rerun()
+
     # === Behavior Section ===
     st.markdown("### 抽卡行为")
     always_single = st.checkbox(
