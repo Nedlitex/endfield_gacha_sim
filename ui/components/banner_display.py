@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from ui.components.st_horizontal import st_horizontal
 from ui.constants import RARITY_COLORS
 from ui.state import update_url
 
@@ -9,14 +10,12 @@ from ui.state import update_url
 def render_banner_display():
     """Render the banner display grid with expand/collapse controls."""
     st.header("卡池")
-    col1, col2, col3 = st.columns([1, 1, 10])
-    with col1:
+    with st_horizontal():
         if st.button("展开全部"):
             for banner in st.session_state.banners:
                 banner.expanded = True
             update_url()
             st.rerun()
-    with col2:
         if st.button("折叠全部"):
             for banner in st.session_state.banners:
                 banner.expanded = False

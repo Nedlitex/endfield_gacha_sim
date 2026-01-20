@@ -8,6 +8,7 @@ import streamlit as st
 from banner import Banner
 from gacha import Config, Run
 from strategy import ContinueAction, DrawBehavior, DrawStrategy
+from ui.components.st_horizontal import st_horizontal
 from ui.components.strategy_section import render_strategy_section
 from ui.constants import RARITY_COLORS
 from ui.defaults import create_default_operators
@@ -762,13 +763,11 @@ def _render_run_confirmation_dialog(num_experiments: int, auto_config: dict):
         st.markdown("---")
 
         # Confirmation buttons
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("取消", use_container_width=True):
+        with st_horizontal():
+            if st.button("取消"):
                 st.session_state.show_run_confirmation = False
                 st.rerun()
-        with col2:
-            if st.button("确认运行", type="primary", use_container_width=True):
+            if st.button("确认运行", type="primary"):
                 st.session_state.show_run_confirmation = False
                 st.session_state.run_simulation_confirmed = True
                 st.rerun()

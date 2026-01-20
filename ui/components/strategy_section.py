@@ -20,6 +20,7 @@ from strategy import (
     StrategyCondition,
     StrategyRule,
 )
+from ui.components.st_horizontal import st_horizontal
 from ui.state import update_url
 
 
@@ -159,37 +160,25 @@ def _render_strategy_editor(current_strategy: DrawStrategy):
     for idx, rule in enumerate(current_strategy.rules):
         with st.container():
             st.markdown(f"**规则 {idx + 1}** (优先级: {rule.priority})")
-            col_rule, col_up, col_down, col_edit, col_delete = st.columns(
-                [5, 0.6, 0.6, 0.8, 0.8]
-            )
+            _render_rule_summary(rule)
 
-            with col_rule:
-                _render_rule_summary(rule)
-
-            with col_up:
+            with st_horizontal():
                 if idx > 0:
                     if st.button(
                         "↑", key=f"{strategy_key_prefix}move_up_{idx}", help="上移"
                     ):
                         rule_to_move_up = idx
-                else:
-                    st.write("")  # Placeholder for alignment
 
-            with col_down:
                 if idx < len(current_strategy.rules) - 1:
                     if st.button(
                         "↓", key=f"{strategy_key_prefix}move_down_{idx}", help="下移"
                     ):
                         rule_to_move_down = idx
-                else:
-                    st.write("")  # Placeholder for alignment
 
-            with col_edit:
                 edit_key = f"{strategy_key_prefix}editing_rule_{idx}"
                 if st.button("编辑", key=f"{strategy_key_prefix}edit_rule_{idx}"):
                     st.session_state[edit_key] = True
 
-            with col_delete:
                 if st.button("删除", key=f"{strategy_key_prefix}delete_rule_{idx}"):
                     rules_to_remove.append(idx)
 
@@ -721,8 +710,7 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
             action = None
 
     # Buttons
-    col1, col2 = st.columns(2)
-    with col1:
+    with st_horizontal():
         if st.button("确认添加", key=f"{prefix}confirm_add_rule"):
             if action is not None:
                 # Build conditions
@@ -796,8 +784,6 @@ def _render_new_rule_editor(current_strategy: DrawStrategy, prefix: str):
                 st.session_state[f"{prefix}adding_rule"] = False
                 update_url()
                 st.rerun()
-
-    with col2:
         if st.button("取消", key=f"{prefix}cancel_add_rule"):
             st.session_state[f"{prefix}adding_rule"] = False
             st.rerun()
@@ -1364,8 +1350,7 @@ def _render_existing_rule_editor(
             new_action = None
 
     # Buttons
-    col1, col2 = st.columns(2)
-    with col1:
+    with st_horizontal():
         if st.button("保存修改", key=f"{rule_prefix}save_rule"):
             if new_action is not None:
                 # Build conditions
@@ -1444,8 +1429,6 @@ def _render_existing_rule_editor(
                 )
                 update_url()
                 st.rerun()
-
-    with col2:
         if st.button("取消", key=f"{rule_prefix}cancel_edit"):
             strategy_key_prefix = f"strategy_{st.session_state.current_strategy_idx}_"
             st.session_state[f"{strategy_key_prefix}editing_rule_{rule_idx}"] = False
@@ -1645,12 +1628,10 @@ def _render_default_action_editor(current_strategy: DrawStrategy, prefix: str):
 
 def _render_strategy_creation():
     """Render the strategy creation and deletion section."""
-    col_create, col_delete, col_apply, col_desc = st.columns(4)
-    with col_create:
-        with st.popover("创建新策略", use_container_width=True):
+    with st_horizontal():
+        with st.popover("创建新策略"):
             _render_strategy_creation_dialog()
 
-    with col_delete:
         # Delete strategy button (only if more than one strategy exists and not default)
         if (
             len(st.session_state.strategies) > 1
@@ -1665,7 +1646,6 @@ def _render_strategy_creation():
                 update_url()
                 st.rerun()
 
-    with col_apply:
         # Apply current strategy to all banners button
         if st.button(
             "应用到所有卡池", help="将当前策略应用到所有卡池（包括自动添加的卡池）"
@@ -1688,9 +1668,8 @@ def _render_strategy_creation():
             update_url()
             st.rerun()
 
-    with col_desc:
         # Show strategy description button
-        with st.popover("查看策略说明", use_container_width=True):
+        with st.popover("查看策略说明"):
             current_strategy = _get_current_strategy()
             strategy_registry = {s.name: s for s in st.session_state.strategies}
             description = current_strategy.get_description(strategy_registry)
@@ -1741,11 +1720,9 @@ def _render_strategy_creation_dialog():
     rules_to_remove = []
     for idx, rule in enumerate(st.session_state[f"{prefix}rules"]):
         with st.container():
-            col_rule, col_del = st.columns([5, 1])
-            with col_rule:
-                st.markdown(f"**规则 {idx + 1}** (优先级: {rule.priority})")
-                _render_rule_summary(rule)
-            with col_del:
+            st.markdown(f"**规则 {idx + 1}** (优先级: {rule.priority})")
+            _render_rule_summary(rule)
+            with st_horizontal():
                 if st.button("删除", key=f"{prefix}del_rule_{idx}"):
                     rules_to_remove.append(idx)
 
@@ -1899,19 +1876,16 @@ def _render_strategy_creation_dialog():
     )
 
     # Preview and Create buttons
-    col_preview, col_create = st.columns(2)
-    with col_preview:
-        with st.popover("预览策略", use_container_width=True):
+    with st_horizontal():
+        with st.popover("预览策略"):
             strategy_registry = {s.name: s for s in st.session_state.strategies}
             description = preview_strategy.get_description(strategy_registry)
             st.code(description, language=None)
 
-    with col_create:
         if st.button(
             "创建策略",
             key=f"{prefix}create_btn",
             disabled=name_exists,
-            use_container_width=True,
         ):
             if new_strategy_name and not name_exists and new_default_action is not None:
                 st.session_state.strategies.append(preview_strategy)
